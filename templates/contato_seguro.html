@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Contato Seguro — ADVOGO SEGURO</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+<div class="mobile-topbar">
+  <button onclick="toggleSidebar()">☰</button>
+  <div class="brand" style="font-size:1rem;">🛡️ ADVOGO SEGURO</div>
+  <div></div>
+</div>
+
+<div class="app-shell">
+  {% include '_sidebar.html' with context %}
+
+  <main class="main-content">
+    <div class="topbar">
+      <h1>🔐 Contato Seguro ADVOGO</h1>
+      <div style="display:flex; gap:10px; flex-wrap:wrap;">
+        <button class="btn-spy btn-spy-ghost" onclick="limparExpirados()">🧹 Limpar contatos expirados</button>
+        <button class="btn-spy btn-spy-primary" onclick="abrirModalIniciar()">▶ Iniciar Contato Seguro</button>
+      </div>
+    </div>
+
+    <div class="panel" style="background:linear-gradient(135deg, var(--azul-escuro), var(--azul-medio)); color:var(--branco);">
+      <div style="display:flex; gap:16px; align-items:flex-start;">
+        <div style="font-size:1.8rem;">💡</div>
+        <div>
+          <strong>Como usar:</strong> antes de ligar, mandar WhatsApp ou e-mail para o cliente, clique em
+          "Iniciar Contato Seguro". O sistema gera um código interno (CCA) válido por {{ '' }}<span id="ttlMinutos">10</span> minutos.
+          O cliente <u>nunca</u> precisa saber esse código — ele só consulta, no app dele, se existe um contato autorizado ativo
+          naquele momento. Assim, mesmo que um golpista saiba o nome do advogado, o número do processo ou a OAB, ele não tem
+          como burlar a verificação.
+        </div>
+      </div>
+    </div>
+
+    <div id="alertaContatoSeguro" class="alert-box"></div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>🧠 Analisar com IA</h2></div>
+      <p class="helper-text" style="margin-bottom:14px;">Cole uma mensagem suspeita recebida pelo cliente para avaliar o risco de golpe (motor por regras, sem custo de API).</p>
+      <div class="form-group">
+        <label>Código do processo (opcional, ajuda a comparar com o número oficial)</label>
+        <input type="text" class="form-control" id="iaCodigoProcesso" placeholder="Ex: AB12CD34" style="text-transform:uppercase;">
+      </div>
+      <div class="form-group">
+        <label>Número suspeito (opcional)</label>
+        <input type="text" class="form-control" id="iaNumero" placeholder="(61) 99999-9999">
+      </div>
+      <div class="form-group">
+        <label>Mensagem recebida</label>
+        <textarea class="form-control" id="iaTexto" placeholder="Cole aqui a mensagem suspeita..."></textarea>
+      </div>
+      <button class="btn-rounded btn-acao-azul" id="btnAnalisarIA" onclick="analisarComIA()">🧠 Analisar com IA</button>
+      <div id="resultadoIAEscritorio" style="display:none; margin-top:16px; padding:16px; border-radius:12px;"></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Histórico de Contatos Seguros</h2>
+        <span class="helper-text">Atualiza automaticamente o status (ativo / expirado / usado / cancelado).</span>
+      </div>
+      <div class="table-wrap">
+        <table class="spy-table" id="tabelaCca">
+          <thead>
+            <tr><th>Código</th><th>Cliente</th><th>Advogado</th><th>Canal</th><th>Status</th><th>Expira em</th><th>Ações</th></tr>
+          </thead>
+          <tbody id="corpoTabelaCca">
+            <tr><td colspan="7" class="empty-state">Carregando...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- Modal iniciar contato seguro -->
+<div class="modal-overlay" id="modalIniciar">
+  <div class="modal-box">
+    <h3>▶ Iniciar Contato Seguro</h3>
+    <p style="color:var(--texto-suave); font-size:0.9rem;">
+      Faça isso ANTES de ligar ou mandar mensagem para o cliente. O código gerado é apenas para seu controle interno.
+    </p>
+    <div id="alertaModalIniciar" class="alert-box"></div>
+    <form id="formIniciar">
+      <div class="form-group">
+        <label>Advogado responsável</label>
+        <select class="form-control" id="ccaAdvogado" required>
+          <option value="">Selecione...</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Processo / Cliente</label>
+        <select class="form-control" id="ccaProcesso" required>
+          <option value="">Selecione...</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Canal do contato</label>
+        <select class="form-control" id="ccaCanal">
+          <option value="whatsapp">💬 WhatsApp</option>
+          <option value="ligacao">📞 Ligação</option>
+          <option value="videochamada">🎥 Videochamada</option>
+          <option value="email">✉️ E-mail</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Observação (opcional)</label>
+        <textarea class="form-control" id="ccaObservacao" placeholder="Ex: confirmar pagamento de honorários"></textarea>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn-spy btn-spy-ghost" onclick="limparFormularioIniciar()">🧽 Limpar</button>
+        <button type="button" class="btn-spy btn-spy-ghost btn-spy-block" onclick="fecharModalIniciar()">Cancelar</button>
+        <button type="submit" class="btn-spy btn-spy-primary btn-spy-block" id="btnIniciarCca">Gerar código</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Modal resultado do CCA gerado -->
+<div class="modal-overlay" id="modalResultadoCca">
+  <div class="modal-box">
+    <h3>✅ Contato Seguro iniciado</h3>
+    <p style="color:var(--texto-suave); font-size:0.9rem;">
+      Pode ligar ou mandar mensagem agora. Não é necessário informar este código ao cliente.
+    </p>
+    <div class="codigo-destaque">
+      <div class="label">Código interno (uso do escritório)</div>
+      <div class="codigo" id="codigoCcaGerado">—</div>
+      <div class="senha-cliente" id="infoValidadeCca">—</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-spy btn-spy-primary btn-spy-block" onclick="fecharModalResultadoCca()">Concluir</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal cancelar -->
+<div class="modal-overlay" id="modalCancelarCca">
+  <div class="modal-box">
+    <h3>Cancelar Contato Seguro?</h3>
+    <p style="color:var(--texto-suave);">O cliente deixará de ver este contato como autorizado imediatamente.</p>
+    <div id="alertaCancelarCca" class="alert-box"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn-spy btn-spy-ghost btn-spy-block" onclick="document.getElementById('modalCancelarCca').classList.remove('show')">Voltar</button>
+      <button type="button" class="btn-spy btn-spy-danger btn-spy-block" id="btnConfirmarCancelarCca">Cancelar contato</button>
+    </div>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/api.js') }}"></script>
+<script>
+Auth.requireTipo('escritorio', '/escritorio/login');
+
+let advogadosCache = [];
+let processosCache = [];
+let ccaCancelandoId = null;
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str || '';
+  return div.innerHTML;
+}
+
+async function carregarSelects() {
+  try {
+    [advogadosCache, processosCache] = await Promise.all([
+      apiRequest('/api/escritorio/advogados'),
+      apiRequest('/api/escritorio/processos')
+    ]);
+    const selAdv = document.getElementById('ccaAdvogado');
+    selAdv.innerHTML = advogadosCache.length === 0
+      ? '<option value="">Cadastre um advogado primeiro</option>'
+      : '<option value="">Selecione...</option>' + advogadosCache.map(a => `<option value="${a.id}">${escapeHtml(a.nome)}</option>`).join('');
+
+    const selProc = document.getElementById('ccaProcesso');
+    const ativos = processosCache.filter(p => p.status === 'ativo');
+    selProc.innerHTML = ativos.length === 0
+      ? '<option value="">Cadastre um processo primeiro</option>'
+      : '<option value="">Selecione...</option>' + ativos.map(p => `<option value="${p.id}">${escapeHtml(p.cliente_nome)} — ${escapeHtml(p.codigo_unico)}</option>`).join('');
+  } catch (err) {
+    showAlert('alertaContatoSeguro', err.message, 'erro');
+  }
+}
+
+function abrirModalIniciar() {
+  hideAlert('alertaModalIniciar');
+  document.getElementById('formIniciar').reset();
+  document.getElementById('modalIniciar').classList.add('show');
+}
+function fecharModalIniciar() {
+  document.getElementById('modalIniciar').classList.remove('show');
+}
+function limparFormularioIniciar() {
+  document.getElementById('formIniciar').reset();
+  hideAlert('alertaModalIniciar');
+}
+function fecharModalResultadoCca() {
+  document.getElementById('modalResultadoCca').classList.remove('show');
+  carregarHistorico();
+}
+
+async function reiniciarCca(id) {
+  hideAlert('alertaContatoSeguro');
+  try {
+    const data = await apiRequest('/api/escritorio/contato-seguro/reiniciar/' + id, { method: 'POST' });
+    document.getElementById('codigoCcaGerado').textContent = data.codigo_cca;
+    document.getElementById('infoValidadeCca').innerHTML = `Válido até <b>${data.expira_em.split(' ')[1]}</b> — canal: <b>${canalLabel(data.canal)}</b>`;
+    document.getElementById('modalResultadoCca').classList.add('show');
+  } catch (err) {
+    showAlert('alertaContatoSeguro', err.message, 'erro');
+  }
+}
+
+async function gerarPdfCca(id) {
+  try {
+    const resp = await fetch('/api/escritorio/relatorio/contato-seguro/' + id + '/pdf', {
+      headers: { 'Authorization': 'Bearer ' + Auth.getToken() }
+    });
+    if (!resp.ok) throw new Error('Não foi possível gerar o PDF.');
+    const blob = await resp.blob();
+    window.open(URL.createObjectURL(blob), '_blank');
+  } catch (err) {
+    showAlert('alertaContatoSeguro', err.message, 'erro');
+  }
+}
+
+async function limparExpirados() {
+  hideAlert('alertaContatoSeguro');
+  try {
+    const data = await apiRequest('/api/escritorio/contato-seguro/limpar-expirados', { method: 'POST' });
+    showAlert('alertaContatoSeguro', `${data.marcados_como_expirados} contato(s) marcado(s) como expirado(s).`, 'sucesso');
+    carregarHistorico();
+  } catch (err) {
+    showAlert('alertaContatoSeguro', err.message, 'erro');
+  }
+}
+
+function badgeStatusCca(status) {
+  const map = {
+    ativo: '<span class="badge-pill badge-verde">🟢 Ativo</span>',
+    expirado: '<span class="badge-pill badge-cinza">Expirado</span>',
+    usado: '<span class="badge-pill badge-amarelo">Usado</span>',
+    cancelado: '<span class="badge-pill badge-vermelho">Cancelado</span>'
+  };
+  return map[status] || status;
+}
+
+function canalLabel(c) {
+  const m = { whatsapp: '💬 WhatsApp', ligacao: '📞 Ligação', videochamada: '🎥 Videochamada', email: '✉️ E-mail' };
+  return m[c] || c;
+}
+
+async function carregarHistorico() {
+  const corpo = document.getElementById('corpoTabelaCca');
+  try {
+    const lista = await apiRequest('/api/escritorio/contato-seguro/listar');
+    if (lista.length === 0) {
+      corpo.innerHTML = '<tr><td colspan="7"><div class="empty-state"><div class="ic">🔐</div>Nenhum Contato Seguro iniciado ainda.</div></td></tr>';
+      return;
+    }
+    corpo.innerHTML = lista.map(c => `
+      <tr>
+        <td><code style="font-weight:700;">${escapeHtml(c.codigo_cca)}</code></td>
+        <td>${escapeHtml(c.cliente_nome)}</td>
+        <td>${escapeHtml(c.advogado_nome || '—')}</td>
+        <td>${canalLabel(c.canal)}</td>
+        <td>${badgeStatusCca(c.status)}</td>
+        <td>${escapeHtml(c.expira_em)}</td>
+        <td>
+          ${c.status === 'ativo' ? `<button class="btn-spy btn-spy-ghost" style="padding:6px 10px; font-size:0.78rem; color:var(--vermelho);" onclick="abrirModalCancelarCca(${c.id})">Cancelar</button>` : ''}
+          <button class="btn-spy btn-spy-ghost" style="padding:6px 10px; font-size:0.78rem;" onclick="reiniciarCca(${c.id})">🔄 Reiniciar</button>
+          <button class="btn-spy btn-spy-ghost" style="padding:6px 10px; font-size:0.78rem;" onclick="gerarPdfCca(${c.id})">📄 PDF</button>
+        </td>
+      </tr>
+    `).join('');
+  } catch (err) {
+    showAlert('alertaContatoSeguro', err.message, 'erro');
+  }
+}
+
+function abrirModalCancelarCca(id) {
+  ccaCancelandoId = id;
+  hideAlert('alertaCancelarCca');
+  document.getElementById('modalCancelarCca').classList.add('show');
+}
+
+document.getElementById('btnConfirmarCancelarCca').addEventListener('click', async () => {
+  hideAlert('alertaCancelarCca');
+  const btn = document.getElementById('btnConfirmarCancelarCca');
+  setLoading(btn, true, 'Cancelar contato', 'Cancelando...');
+  try {
+    await apiRequest('/api/escritorio/contato-seguro/cancelar/' + ccaCancelandoId, { method: 'POST' });
+    document.getElementById('modalCancelarCca').classList.remove('show');
+    carregarHistorico();
+  } catch (err) {
+    showAlert('alertaCancelarCca', err.message, 'erro');
+  } finally {
+    setLoading(btn, false, 'Cancelar contato');
+  }
+});
+
+document.getElementById('formIniciar').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  hideAlert('alertaModalIniciar');
+  const btn = document.getElementById('btnIniciarCca');
+  setLoading(btn, true, 'Gerar código', 'Gerando...');
+  try {
+    const data = await apiRequest('/api/escritorio/contato-seguro/iniciar', {
+      method: 'POST',
+      body: {
+        advogado_id: parseInt(document.getElementById('ccaAdvogado').value, 10),
+        processo_id: parseInt(document.getElementById('ccaProcesso').value, 10),
+        canal: document.getElementById('ccaCanal').value,
+        observacao: document.getElementById('ccaObservacao').value.trim()
+      }
+    });
+    fecharModalIniciar();
+    document.getElementById('codigoCcaGerado').textContent = data.codigo_cca;
+    document.getElementById('infoValidadeCca').innerHTML = `Válido até <b>${data.expira_em.split(' ')[1]}</b> — canal: <b>${canalLabel(data.canal)}</b>`;
+    document.getElementById('modalResultadoCca').classList.add('show');
+  } catch (err) {
+    showAlert('alertaModalIniciar', err.message, 'erro');
+  } finally {
+    setLoading(btn, false, 'Gerar código');
+  }
+});
+
+async function analisarComIA() {
+  const texto = document.getElementById('iaTexto').value.trim();
+  const caixa = document.getElementById('resultadoIAEscritorio');
+  if (!texto) {
+    showAlert('alertaContatoSeguro', 'Cole a mensagem suspeita antes de analisar.', 'erro');
+    return;
+  }
+  const btn = document.getElementById('btnAnalisarIA');
+  setLoading(btn, true, '🧠 Analisar com IA', 'Analisando...');
+  try {
+    const data = await apiRequest('/api/ia/analisar-golpe', {
+      method: 'POST',
+      body: {
+        texto_mensagem: texto,
+        numero_suspeito: document.getElementById('iaNumero').value.trim(),
+        codigo_processo: document.getElementById('iaCodigoProcesso').value.trim()
+      }
+    });
+    const cores = { 'crítico': ['#fdeceb', '#8e231d'], 'alto': ['#fdeceb', '#8e231d'], 'médio': ['#fff6e0', '#7a570a'], 'baixo': ['#e8f8ef', '#0b5d3b'] };
+    const [bg, txt] = cores[data.risco] || ['#f4f6fb', '#1b2535'];
+    caixa.style.background = bg;
+    caixa.style.color = txt;
+    caixa.style.display = 'block';
+    caixa.innerHTML = `
+      <b>Risco: ${data.risco.toUpperCase()} (pontuação ${data.pontuacao}/100)</b><br><br>
+      <b>Sinais detectados:</b> ${data.sinais_detectados.length ? data.sinais_detectados.join(', ') : 'nenhum sinal forte'}<br><br>
+      <b>Recomendação:</b> ${data.recomendacao}<br><br>
+      <b>Mensagem sugerida para o cliente:</b> ${data.mensagem_para_cliente}
+    `;
+  } catch (err) {
+    showAlert('alertaContatoSeguro', err.message, 'erro');
+  } finally {
+    setLoading(btn, false, '🧠 Analisar com IA');
+  }
+}
+
+carregarSelects();
+carregarHistorico();
+setInterval(carregarHistorico, 30000); // mantém status atualizado (expira automaticamente)
+</script>
+</body>
+</html>

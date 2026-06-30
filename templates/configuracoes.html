@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Configurações — ADVOGO SEGURO</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+<div class="mobile-topbar">
+  <button onclick="toggleSidebar()">☰</button>
+  <div class="brand" style="font-size:1rem;">🛡️ ADVOGO SEGURO</div>
+  <div></div>
+</div>
+
+<div class="app-shell">
+  {% include '_sidebar.html' with context %}
+
+  <main class="main-content">
+    <div class="topbar">
+      <h1>Configurações</h1>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>Sua conta</h2></div>
+      <div class="form-group">
+        <label>Escritório</label>
+        <input type="text" class="form-control" id="campoNome" disabled>
+      </div>
+      <div class="form-group">
+        <label>Plano atual</label>
+        <input type="text" class="form-control" id="campoPlano" disabled>
+      </div>
+      <p class="helper-text">Para alterar dados cadastrais ou de cobrança, entre em contato com o suporte SPYNET.</p>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>Alterar senha</h2></div>
+      <div id="alertaSenha" class="alert-box"></div>
+      <form id="formSenha">
+        <div class="form-group">
+          <label>Senha atual</label>
+          <input type="password" class="form-control" id="senhaAtual" required>
+        </div>
+        <div class="form-group">
+          <label>Nova senha</label>
+          <input type="password" class="form-control" id="senhaNova" required minlength="6" placeholder="Mínimo 6 caracteres">
+        </div>
+        <div class="form-group">
+          <label>Confirme a nova senha</label>
+          <input type="password" class="form-control" id="senhaNovaConfirma" required minlength="6">
+        </div>
+        <button type="submit" class="btn-spy btn-spy-primary" id="btnTrocarSenha">Salvar nova senha</button>
+      </form>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>Sessão</h2></div>
+      <p style="color:var(--texto-suave); margin-bottom:18px;">Saia da sua conta neste dispositivo.</p>
+      <button class="btn-spy btn-spy-danger" onclick="Auth.logout()">🚪 Sair da conta</button>
+    </div>
+  </main>
+</div>
+
+<script src="{{ url_for('static', filename='js/api.js') }}"></script>
+<script>
+Auth.requireTipo('escritorio', '/escritorio/login');
+document.getElementById('campoNome').value = Auth.getNome();
+const nomesPlano = { trial: 'Teste grátis', pro: 'PRO', enterprise: 'Enterprise', cancelado: 'Cancelado' };
+document.getElementById('campoPlano').value = nomesPlano[Auth.getPlano()] || Auth.getPlano() || '—';
+
+document.getElementById('formSenha').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  hideAlert('alertaSenha');
+
+  const nova = document.getElementById('senhaNova').value;
+  const confirma = document.getElementById('senhaNovaConfirma').value;
+  if (nova !== confirma) {
+    showAlert('alertaSenha', 'As senhas não coincidem.', 'erro');
+    return;
+  }
+
+  const btn = document.getElementById('btnTrocarSenha');
+  setLoading(btn, true, 'Salvar nova senha', 'Salvando...');
+  try {
+    const data = await apiRequest('/api/escritorio/senha', {
+      method: 'POST',
+      body: {
+        senha_atual: document.getElementById('senhaAtual').value,
+        nova_senha: nova
+      }
+    });
+    showAlert('alertaSenha', data.mensagem, 'sucesso');
+    document.getElementById('formSenha').reset();
+  } catch (err) {
+    showAlert('alertaSenha', err.message, 'erro');
+  } finally {
+    setLoading(btn, false, 'Salvar nova senha');
+  }
+});
+</script>
+</body>
+</html>

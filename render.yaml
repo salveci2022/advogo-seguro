@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: advogo-seguro-api
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: SECRET_KEY
+        generateValue: true
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ADMIN_SECRET
+        sync: false
+      - key: HOTMART_WEBHOOK_TOKEN
+        sync: false
+      - key: DATABASE_URL
+        sync: false

@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Painel — ADVOGO SEGURO</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+<div class="mobile-topbar">
+  <button onclick="toggleSidebar()">☰</button>
+  <div class="brand" style="font-size:1rem;">🛡️ ADVOGO SEGURO</div>
+  <div></div>
+</div>
+
+<div class="app-shell">
+  {% include '_sidebar.html' with context %}
+
+  <main class="main-content">
+    <div class="topbar">
+      <h1>Dashboard</h1>
+      <div class="user-chip">👤 <span id="nomeUsuario">—</span></div>
+    </div>
+
+    <div id="alertaPainel" class="alert-box"></div>
+
+    <div class="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-icon">⚖️</div>
+        <div class="kpi-label">Total de advogados</div>
+        <div class="kpi-value" id="kpiAdvogados">—</div>
+      </div>
+      <div class="kpi-card accent-dourado">
+        <div class="kpi-icon">📁</div>
+        <div class="kpi-label">Total de processos</div>
+        <div class="kpi-value" id="kpiProcessos">—</div>
+      </div>
+      <div class="kpi-card accent-vermelho">
+        <div class="kpi-icon">🚨</div>
+        <div class="kpi-label">Tentativas suspeitas</div>
+        <div class="kpi-value" id="kpiTentativas">—</div>
+      </div>
+      <div class="kpi-card accent-verde">
+        <div class="kpi-icon">💳</div>
+        <div class="kpi-label">Plano atual</div>
+        <div class="kpi-value" id="kpiPlano" style="font-size:1.3rem;">—</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Bem-vindo ao ADVOGO SEGURO</h2>
+      </div>
+      <p style="color:var(--texto-suave); line-height:1.6;">
+        Cadastre seus advogados na seção <strong>Advogados</strong>, vincule processos de clientes na seção <strong>Processos</strong>
+        e acompanhe tentativas de golpe registradas pelos próprios clientes na seção <strong>Tentativas Suspeitas</strong>.
+        Cada processo gera um código único que o cliente pode usar para confirmar a autenticidade de qualquer contato recebido.
+      </p>
+    </div>
+  </main>
+</div>
+
+<script src="{{ url_for('static', filename='js/api.js') }}"></script>
+<script>
+Auth.requireTipo('escritorio', '/escritorio/login');
+document.getElementById('nomeUsuario').textContent = Auth.getNome();
+
+async function carregarDashboard() {
+  try {
+    const [advogados, processos, tentativas] = await Promise.all([
+      apiRequest('/api/escritorio/advogados'),
+      apiRequest('/api/escritorio/processos'),
+      apiRequest('/api/escritorio/tentativas')
+    ]);
+
+    document.getElementById('kpiAdvogados').textContent = advogados.length;
+    document.getElementById('kpiProcessos').textContent = processos.length;
+    document.getElementById('kpiTentativas').textContent = tentativas.length;
+  } catch (err) {
+    showAlert('alertaPainel', err.message, 'erro');
+  }
+}
+
+function atualizarPlanoTag(plano) {
+  const tag = document.getElementById('planoTag');
+  const kpi = document.getElementById('kpiPlano');
+  const nomes = { trial: 'TESTE GRÁTIS', pro: 'PRO', enterprise: 'ENTERPRISE', cancelado: 'CANCELADO' };
+  const texto = nomes[plano] || plano || '—';
+  if (tag) tag.textContent = 'PLANO: ' + texto;
+  if (kpi) kpi.textContent = texto;
+}
+
+// Como não há endpoint "/me", buscamos o plano relendo o login não é ideal;
+// então usamos o plano vindo da sessão (salvo no login/cadastro), com fallback.
+const planoSalvo = Auth.getPlano();
+atualizarPlanoTag(planoSalvo);
+
+carregarDashboard();
+</script>
+</body>
+</html>

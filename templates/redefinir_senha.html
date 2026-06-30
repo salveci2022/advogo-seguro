@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Redefinir senha — ADVOGO SEGURO</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+<div class="auth-wrap">
+  <div class="auth-side">
+    <div class="brand" style="display:flex;align-items:center;gap:10px;font-weight:800;font-size:1.3rem;margin-bottom:30px;">
+      <span style="color:var(--dourado);font-size:1.6rem;">🛡️</span> ADVOGO SEGURO
+    </div>
+    <h2>Redefinição de senha</h2>
+    <p>Crie uma nova senha para acessar sua conta com segurança.</p>
+  </div>
+
+  <div class="auth-form-col">
+    <div class="auth-card">
+      <div class="brand" style="font-weight:800; font-size:1.1rem; display:flex; gap:8px; align-items:center;">🛡️ ADVOGO SEGURO</div>
+      <div class="sub" id="subTitulo">Defina sua nova senha</div>
+
+      <div id="alertaReset" class="alert-box"></div>
+
+      <form id="formReset">
+        <div class="form-group">
+          <label>Nova senha</label>
+          <input type="password" class="form-control" id="novaSenha" required minlength="6" placeholder="Mínimo 6 caracteres">
+        </div>
+        <div class="form-group">
+          <label>Confirme a nova senha</label>
+          <input type="password" class="form-control" id="confirmaSenha" required minlength="6" placeholder="Repita a senha">
+        </div>
+        <button type="submit" class="btn-spy btn-spy-primary btn-spy-block" id="btnRedefinir">Redefinir senha</button>
+      </form>
+
+      <div class="auth-foot" id="linksRodape" style="display:none;">
+        <a href="/escritorio/login" id="linkLoginEscritorio" style="display:none;">Ir para o login do escritório</a>
+        <a href="/cliente/login" id="linkLoginCliente" style="display:none;">Ir para o login do cliente</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/api.js') }}"></script>
+<script>
+const params = new URLSearchParams(window.location.search);
+const token = params.get('token');
+const tipo = params.get('tipo') === 'cliente' ? 'cliente' : 'escritorio';
+
+if (!token) {
+  showAlert('alertaReset', 'Link inválido: token não encontrado na URL.', 'erro');
+  document.getElementById('formReset').style.display = 'none';
+}
+
+document.getElementById('formReset').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  hideAlert('alertaReset');
+
+  const nova = document.getElementById('novaSenha').value;
+  const confirma = document.getElementById('confirmaSenha').value;
+
+  if (nova !== confirma) {
+    showAlert('alertaReset', 'As senhas não coincidem.', 'erro');
+    return;
+  }
+
+  const btn = document.getElementById('btnRedefinir');
+  setLoading(btn, true, 'Redefinir senha', 'Salvando...');
+
+  const rota = tipo === 'cliente' ? '/api/cliente/redefinir-senha' : '/api/escritorio/redefinir-senha';
+
+  try {
+    const data = await apiRequest(rota, {
+      method: 'POST',
+      auth: false,
+      body: { token, nova_senha: nova }
+    });
+    showAlert('alertaReset', data.mensagem || 'Senha redefinida com sucesso!', 'sucesso');
+    document.getElementById('formReset').style.display = 'none';
+    document.getElementById('linksRodape').style.display = 'block';
+    if (tipo === 'cliente') {
+      document.getElementById('linkLoginCliente').style.display = 'inline';
+    } else {
+      document.getElementById('linkLoginEscritorio').style.display = 'inline';
+    }
+  } catch (err) {
+    showAlert('alertaReset', err.message, 'erro');
+  } finally {
+    setLoading(btn, false, 'Redefinir senha');
+  }
+});
+</script>
+</body>
+</html>

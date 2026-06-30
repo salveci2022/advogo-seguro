@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Advogados — ADVOGO SEGURO</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+<div class="mobile-topbar">
+  <button onclick="toggleSidebar()">☰</button>
+  <div class="brand" style="font-size:1rem;">🛡️ ADVOGO SEGURO</div>
+  <div></div>
+</div>
+
+<div class="app-shell">
+  {% include '_sidebar.html' with context %}
+
+  <main class="main-content">
+    <div class="topbar">
+      <h1>Advogados</h1>
+      <button class="btn-spy btn-spy-primary" onclick="abrirModalNovo()">+ Novo Advogado</button>
+    </div>
+
+    <div id="alertaAdvogados" class="alert-box"></div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>Advogados cadastrados</h2></div>
+      <div class="table-wrap">
+        <table class="spy-table" id="tabelaAdvogados">
+          <thead>
+            <tr><th>Foto</th><th>Nome</th><th>OAB</th><th>Telefone oficial</th><th>Ações</th></tr>
+          </thead>
+          <tbody id="corpoTabelaAdvogados">
+            <tr><td colspan="5" class="empty-state">Carregando...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- Modal cadastro/edição -->
+<div class="modal-overlay" id="modalAdvogado">
+  <div class="modal-box">
+    <h3 id="tituloModalAdvogado">Cadastrar advogado</h3>
+    <div id="alertaModal" class="alert-box"></div>
+    <form id="formAdvogado">
+      <input type="hidden" id="advId" value="">
+      <div class="form-group">
+        <label>Nome</label>
+        <input type="text" class="form-control" id="advNome" required placeholder="Dr. Nome Completo">
+      </div>
+      <div class="form-group">
+        <label>OAB</label>
+        <input type="text" class="form-control" id="advOab" placeholder="OAB/DF 123456">
+      </div>
+      <div class="form-group">
+        <label>Telefone oficial</label>
+        <input type="text" class="form-control" id="advTelefone" required placeholder="(61) 99999-9999">
+      </div>
+      <div class="form-group">
+        <label>Foto URL</label>
+        <input type="url" class="form-control" id="advFoto" placeholder="https://..." oninput="atualizarPreviaFoto()">
+        <div class="helper-text">Cole um link de imagem, ou envie um arquivo abaixo (jpg, jpeg, png ou webp, até 3 MB).</div>
+      </div>
+      <div class="form-group">
+        <label>Ou enviar foto do computador</label>
+        <input type="file" class="form-control" id="advFotoArquivo" accept=".jpg,.jpeg,.png,.webp" onchange="previaArquivoSelecionado()">
+      </div>
+      <div class="form-group" style="text-align:center;">
+        <img id="previaFoto" src="" alt="Pré-visualização" style="display:none; width:90px; height:90px; border-radius:50%; object-fit:cover; border:3px solid var(--dourado); margin:0 auto;">
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn-spy btn-spy-ghost btn-spy-block" onclick="fecharModalNovo()">Cancelar</button>
+        <button type="submit" class="btn-spy btn-spy-primary btn-spy-block" id="btnSalvarAdvogado">Salvar</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Modal confirmação de exclusão -->
+<div class="modal-overlay" id="modalExcluirAdvogado">
+  <div class="modal-box">
+    <h3>Excluir advogado?</h3>
+    <p style="color:var(--texto-suave);">Esta ação não pode ser desfeita. Advogados com processos vinculados não podem ser excluídos.</p>
+    <div id="alertaExcluir" class="alert-box"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn-spy btn-spy-ghost btn-spy-block" onclick="document.getElementById('modalExcluirAdvogado').classList.remove('show')">Cancelar</button>
+      <button type="button" class="btn-spy btn-spy-danger btn-spy-block" id="btnConfirmarExcluir">Excluir</button>
+    </div>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/api.js') }}"></script>
+<script>
+Auth.requireTipo('escritorio', '/escritorio/login');
+
+let advogadoEditandoId = null;
+let advogadoExcluindoId = null;
+
+function abrirModalNovo() {
+  advogadoEditandoId = null;
+  document.getElementById('tituloModalAdvogado').textContent = 'Cadastrar advogado';
+  document.getElementById('btnSalvarAdvogado').textContent = 'Salvar';
+  document.getElementById('formAdvogado').reset();
+  document.getElementById('previaFoto').style.display = 'none';
+  document.getElementById('modalAdvogado').classList.add('show');
+}
+
+function abrirModalEditar(adv) {
+  advogadoEditandoId = adv.id;
+  document.getElementById('tituloModalAdvogado').textContent = 'Editar advogado';
+  document.getElementById('btnSalvarAdvogado').textContent = 'Salvar alterações';
+  document.getElementById('advNome').value = adv.nome || '';
+  document.getElementById('advOab').value = adv.oab || '';
+  document.getElementById('advTelefone').value = adv.telefone_oficial || '';
+  document.getElementById('advFoto').value = adv.foto_url || '';
+  document.getElementById('advFotoArquivo').value = '';
+  atualizarPreviaFoto();
+  document.getElementById('modalAdvogado').classList.add('show');
+}
+
+function atualizarPreviaFoto() {
+  const url = document.getElementById('advFoto').value.trim();
+  const img = document.getElementById('previaFoto');
+  if (url) {
+    img.src = url;
+    img.style.display = 'block';
+  } else {
+    img.style.display = 'none';
+  }
+}
+
+function previaArquivoSelecionado() {
+  const arquivo = document.getElementById('advFotoArquivo').files[0];
+  if (!arquivo) return;
+  const leitor = new FileReader();
+  leitor.onload = (e) => {
+    const img = document.getElementById('previaFoto');
+    img.src = e.target.result;
+    img.style.display = 'block';
+  };
+  leitor.readAsDataURL(arquivo);
+}
+
+function fecharModalNovo() {
+  document.getElementById('modalAdvogado').classList.remove('show');
+  document.getElementById('formAdvogado').reset();
+  document.getElementById('previaFoto').style.display = 'none';
+  hideAlert('alertaModal');
+  advogadoEditandoId = null;
+}
+
+function abrirModalExcluir(id) {
+  advogadoExcluindoId = id;
+  hideAlert('alertaExcluir');
+  document.getElementById('modalExcluirAdvogado').classList.add('show');
+}
+
+let listaAdvogadosCache = [];
+
+async function carregarAdvogados() {
+  const corpo = document.getElementById('corpoTabelaAdvogados');
+  try {
+    const lista = await apiRequest('/api/escritorio/advogados');
+    listaAdvogadosCache = lista;
+    if (lista.length === 0) {
+      corpo.innerHTML = '<tr><td colspan="5"><div class="empty-state"><div class="ic">⚖️</div>Nenhum advogado cadastrado ainda.</div></td></tr>';
+      return;
+    }
+    corpo.innerHTML = lista.map(a => `
+      <tr>
+        <td>${a.foto_url ? `<img src="${a.foto_url}" alt="" style="width:38px;height:38px;border-radius:50%;object-fit:cover;">` : '👤'}</td>
+        <td><strong>${escapeHtml(a.nome)}</strong></td>
+        <td>${a.oab ? escapeHtml(a.oab) : '<span class="badge-pill badge-cinza">Não informado</span>'}</td>
+        <td>${escapeHtml(a.telefone_oficial)}</td>
+        <td style="white-space:nowrap;">
+          <button class="btn-spy btn-spy-ghost" style="padding:6px 12px; font-size:0.82rem;" onclick='abrirModalEditar(${JSON.stringify(a)})'>✏️ Editar</button>
+          <button class="btn-spy btn-spy-ghost" style="padding:6px 12px; font-size:0.82rem; color:var(--vermelho);" onclick="abrirModalExcluir(${a.id})">🗑️</button>
+        </td>
+      </tr>
+    `).join('');
+  } catch (err) {
+    showAlert('alertaAdvogados', err.message, 'erro');
+  }
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str || '';
+  return div.innerHTML;
+}
+
+document.getElementById('formAdvogado').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  hideAlert('alertaModal');
+  const btn = document.getElementById('btnSalvarAdvogado');
+  setLoading(btn, true, advogadoEditandoId ? 'Salvar alterações' : 'Salvar', 'Salvando...');
+  try {
+    const corpo = {
+      nome: document.getElementById('advNome').value.trim(),
+      oab: document.getElementById('advOab').value.trim(),
+      telefone_oficial: document.getElementById('advTelefone').value.trim(),
+      foto_url: document.getElementById('advFoto').value.trim()
+    };
+    let idAlvo = advogadoEditandoId;
+    if (advogadoEditandoId) {
+      await apiRequest('/api/escritorio/advogados/' + advogadoEditandoId, { method: 'PUT', body: corpo });
+    } else {
+      const criado = await apiRequest('/api/escritorio/advogados', { method: 'POST', body: corpo });
+      idAlvo = criado.id;
+    }
+
+    const arquivoFoto = document.getElementById('advFotoArquivo').files[0];
+    if (arquivoFoto && idAlvo) {
+      const formData = new FormData();
+      formData.append('foto', arquivoFoto);
+      const respUpload = await fetch('/api/escritorio/advogados/' + idAlvo + '/foto', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + Auth.getToken() },
+        body: formData
+      });
+      if (!respUpload.ok) {
+        const erroUpload = await respUpload.json().catch(() => ({}));
+        throw new Error(erroUpload.erro || 'Não foi possível enviar a foto.');
+      }
+    }
+
+    fecharModalNovo();
+    carregarAdvogados();
+  } catch (err) {
+    showAlert('alertaModal', err.message, 'erro');
+  } finally {
+    setLoading(btn, false, advogadoEditandoId ? 'Salvar alterações' : 'Salvar');
+  }
+});
+
+document.getElementById('btnConfirmarExcluir').addEventListener('click', async () => {
+  hideAlert('alertaExcluir');
+  const btn = document.getElementById('btnConfirmarExcluir');
+  setLoading(btn, true, 'Excluir', 'Excluindo...');
+  try {
+    await apiRequest('/api/escritorio/advogados/' + advogadoExcluindoId, { method: 'DELETE' });
+    document.getElementById('modalExcluirAdvogado').classList.remove('show');
+    carregarAdvogados();
+  } catch (err) {
+    showAlert('alertaExcluir', err.message, 'erro');
+  } finally {
+    setLoading(btn, false, 'Excluir');
+  }
+});
+
+carregarAdvogados();
+</script>
+</body>
+</html>

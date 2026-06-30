@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Área do Cliente — ADVOGO SEGURO</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body style="background:var(--cinza-claro);">
+
+<header class="navbar-public" style="position:sticky; top:0; z-index:10;">
+  <div class="container-narrow">
+    <div class="brand"><span class="shield">🛡️</span> ADVOGO SEGURO</div>
+    <nav>
+      <span style="margin-right:20px; opacity:0.85;">👤 <span id="nomeCliente">—</span></span>
+      <a href="#" onclick="Auth.logout(); return false;">Sair</a>
+    </nav>
+  </div>
+</header>
+
+<div class="container-narrow" style="padding-top:36px; padding-bottom:60px;">
+
+  <div class="panel" style="border:2px solid var(--azul-medio); text-align:center;">
+    <div style="font-size:1.3rem; font-weight:800; color:var(--azul-escuro); margin-bottom:6px;">
+      📞 Alguém ligou ou mandou mensagem dizendo ser seu advogado?
+    </div>
+    <p style="color:var(--texto-suave); font-size:1.05rem; line-height:1.6; max-width:520px; margin:0 auto 14px;">
+      Não fale nada com essa pessoa. Não fale código nem senha. Aperte o botão abaixo e ouça a resposta.
+    </p>
+    <button class="btn-ouvir" style="background:var(--cinza-claro); color:var(--azul-escuro); border:2px solid var(--cinza-borda); margin-bottom:18px;"
+      onclick="falarTexto('Se alguem te ligou ou mandou mensagem dizendo ser seu advogado, nao fale nada com essa pessoa. Toque no botao azul grande para verificar se e verdade.')">
+      🔊 Ouvir instruções
+    </button>
+    <br>
+
+    <button class="btn-gigante" id="btnVerificarCca" onclick="verificarContatoSeguro()">
+      <span class="emoji">🔍</span> TOQUE AQUI PARA VERIFICAR
+    </button>
+
+    <div class="semaforo" id="semaforoBox">
+      <div class="emoji-grande" id="semaforoEmoji">•</div>
+      <div class="texto-grande" id="semaforoTexto">—</div>
+      <button class="btn-ouvir" onclick="repetirVoz()">🔊 Ouvir de novo</button>
+    </div>
+
+    <div style="margin-top:22px;">
+      <button class="btn-spy btn-spy-danger" style="font-size:1rem; padding:14px 24px;" onclick="abrirModalSuspeita()">
+        🚨 Avisar que pode ser golpe
+      </button>
+    </div>
+
+    <div style="margin-top:20px; background:var(--amarelo-bg); color:#7a570a; border:2px solid #f0d98c; border-radius:14px; padding:16px; font-size:1.05rem; font-weight:600; max-width:520px; margin-left:auto; margin-right:auto;">
+      ⚠️ Nunca dê dinheiro, senha ou documento para quem te ligou — mesmo se aqui disser que está tudo certo.
+    </div>
+  </div>
+
+  <!-- Modal registrar tentativa suspeita -->
+  <div class="modal-overlay" id="modalSuspeita">
+    <div class="modal-box">
+      <h3>🚨 Avisar que pode ser golpe</h3>
+      <p style="color:var(--texto-suave); font-size:0.95rem;">Não precisa escrever nada. Só toque em "Enviar aviso" para avisar seu escritório.</p>
+      <div id="alertaSuspeita" class="alert-box"></div>
+      <form id="formSuspeita">
+        <div class="form-group">
+          <label>Número que ligou (se quiser informar)</label>
+          <input type="text" class="form-control" id="suspNumero" placeholder="(61) 99999-9999">
+        </div>
+        <div class="form-group">
+          <label>Como a pessoa entrou em contato?</label>
+          <select class="form-control" id="suspCanal">
+            <option value="whatsapp">💬 WhatsApp</option>
+            <option value="ligacao">📞 Ligação</option>
+            <option value="videochamada">🎥 Videochamada</option>
+            <option value="email">✉️ E-mail</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Quer contar o que aconteceu? (opcional)</label>
+          <textarea class="form-control" id="suspDescricao" placeholder="Ex: pediu dinheiro pelo Pix..."></textarea>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn-spy btn-spy-ghost btn-spy-block" onclick="fecharModalSuspeita()">Cancelar</button>
+          <button type="submit" class="btn-spy btn-spy-danger btn-spy-block" id="btnEnviarSuspeita" style="font-size:1.05rem; padding:14px;">📨 Enviar aviso</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h2>📁 Seus processos</h2></div>
+    <div id="alertaProcessosCliente" class="alert-box"></div>
+    <div class="list-processos-cliente" id="listaProcessosCliente">
+      <div class="empty-state">Carregando seus processos...</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <h2>🔍 Verificar contato recebido</h2>
+    </div>
+    <p class="helper-text" style="margin-bottom:20px;">
+      Recebeu uma ligação, mensagem ou e-mail de alguém se identificando como advogado? Preencha abaixo para confirmar se é legítimo.
+    </p>
+
+    <div id="alertaVerificacao" class="alert-box"></div>
+
+    <form id="formVerificar">
+      <div class="form-group">
+        <label>Número que entrou em contato</label>
+        <input type="text" class="form-control" id="vNumero" required placeholder="(61) 99999-9999">
+      </div>
+      <div class="form-group">
+        <label>Código do processo (opcional)</label>
+        <input type="text" class="form-control" id="vCodigo" placeholder="Ex: AB12CD34" style="text-transform:uppercase;">
+        <div class="helper-text">Se você souber o código do seu processo, a verificação fica ainda mais precisa.</div>
+      </div>
+      <div class="form-group">
+        <label>Canal de contato</label>
+        <select class="form-control" id="vCanal">
+          <option value="whatsapp">💬 WhatsApp</option>
+          <option value="ligacao">📞 Ligação</option>
+          <option value="videochamada">🎥 Videochamada</option>
+          <option value="email">✉️ E-mail</option>
+        </select>
+      </div>
+      <div class="form-group" style="display:flex; align-items:center; gap:10px;">
+        <input type="checkbox" id="vPagamento" style="width:auto;">
+        <label for="vPagamento" style="margin:0;">A pessoa pediu pagamento (Pix/transferência) para liberar algo do processo?</label>
+      </div>
+      <div class="form-group">
+        <label>Descrição (opcional)</label>
+        <textarea class="form-control" id="vDescricao" placeholder="Conte o que essa pessoa disse..."></textarea>
+      </div>
+      <button type="submit" class="btn-spy btn-spy-primary btn-spy-block" id="btnVerificar">🔍 Verificar agora</button>
+    </form>
+
+    <div class="resultado-box" id="resultadoBox">
+      <div class="titulo"><span class="ic" id="resultadoIcone">•</span> <span id="resultadoTitulo">—</span></div>
+      <div id="resultadoMensagem"></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h2>🔒 Alterar senha</h2></div>
+    <div id="alertaSenhaCliente" class="alert-box"></div>
+    <form id="formSenhaCliente">
+      <div class="form-group">
+        <label>Senha atual</label>
+        <input type="password" class="form-control" id="senhaAtualCliente" required>
+      </div>
+      <div class="form-group">
+        <label>Nova senha</label>
+        <input type="password" class="form-control" id="senhaNovaCliente" required minlength="6" placeholder="Mínimo 6 caracteres">
+      </div>
+      <div class="form-group">
+        <label>Confirme a nova senha</label>
+        <input type="password" class="form-control" id="senhaNovaClienteConfirma" required minlength="6">
+      </div>
+      <button type="submit" class="btn-spy btn-spy-primary" id="btnTrocarSenhaCliente">Salvar nova senha</button>
+    </form>
+  </div>
+
+</div>
+
+<footer class="footer-spy">
+  ADVOGO SEGURO — SPYNET Tecnologia Forense &amp; Soluções Digitais Ltda.
+</footer>
+
+<script src="{{ url_for('static', filename='js/api.js') }}"></script>
+<script>
+Auth.requireTipo('cliente', '/cliente/login');
+document.getElementById('nomeCliente').textContent = Auth.getNome();
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str || '';
+  return div.innerHTML;
+}
+
+let ultimaFalaTexto = '';
+
+function configurarResultadoCca(resultado, alertaNivel, mensagem) {
+  const box = document.getElementById('semaforoBox');
+  const emoji = document.getElementById('semaforoEmoji');
+  const texto = document.getElementById('semaforoTexto');
+
+  box.className = 'semaforo show';
+  let textoSimples;
+  if (resultado === 'confirmado') {
+    box.classList.add('verde');
+    emoji.textContent = '✅';
+    textoSimples = 'Pode confiar. Esse contato foi autorizado pelo seu advogado.';
+  } else if (alertaNivel === 'alto') {
+    box.classList.add('vermelho');
+    emoji.textContent = '🚫';
+    textoSimples = 'Cuidado! Não existe nenhum contato autorizado agora. Pode ser golpe. Não fale, não envie dinheiro, desligue.';
+  } else {
+    box.classList.add('amarelo');
+    emoji.textContent = '⚠️';
+    textoSimples = 'Atenção. Tenha cuidado com esse contato.';
+  }
+  texto.textContent = textoSimples;
+  ultimaFalaTexto = textoSimples;
+  falarTexto(textoSimples);
+  box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function repetirVoz() {
+  if (ultimaFalaTexto) falarTexto(ultimaFalaTexto);
+}
+
+async function verificarContatoSeguro() {
+  const btn = document.getElementById('btnVerificarCca');
+  setLoading(btn, true, 'TOQUE AQUI PARA VERIFICAR', 'Verificando...');
+  try {
+    const data = await apiRequest('/api/cliente/contato-seguro/verificar', {
+      method: 'POST',
+      body: {}
+    });
+    configurarResultadoCca(data.resultado, data.alerta_nivel, data.mensagem);
+  } catch (err) {
+    showAlert('alertaProcessosCliente', err.message, 'erro');
+  } finally {
+    setLoading(btn, false, '<span class="emoji">🔍</span> TOQUE AQUI PARA VERIFICAR');
+  }
+}
+
+function abrirModalSuspeita() {
+  hideAlert('alertaSuspeita');
+  document.getElementById('formSuspeita').reset();
+  document.getElementById('modalSuspeita').classList.add('show');
+}
+function fecharModalSuspeita() {
+  document.getElementById('modalSuspeita').classList.remove('show');
+}
+
+document.getElementById('formSuspeita').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  hideAlert('alertaSuspeita');
+  const btn = document.getElementById('btnEnviarSuspeita');
+  setLoading(btn, true, '📨 Enviar aviso', 'Enviando...');
+  try {
+    const data = await apiRequest('/api/cliente/contato-seguro/registrar-suspeita', {
+      method: 'POST',
+      body: {
+        numero: document.getElementById('suspNumero').value.trim(),
+        canal: document.getElementById('suspCanal').value,
+        descricao: document.getElementById('suspDescricao').value.trim()
+      }
+    });
+    showAlert('alertaSuspeita', data.mensagem, 'sucesso');
+    falarTexto('Aviso enviado para o seu escritório.');
+    setTimeout(fecharModalSuspeita, 1800);
+  } catch (err) {
+    showAlert('alertaSuspeita', err.message, 'erro');
+  } finally {
+    setLoading(btn, false, '📨 Enviar aviso');
+  }
+});
+
+async function carregarProcessosCliente() {
+  const lista_el = document.getElementById('listaProcessosCliente');
+  try {
+    const lista = await apiRequest('/api/cliente/processos');
+    if (lista.length === 0) {
+      lista_el.innerHTML = '<div class="empty-state"><div class="ic">📁</div>Nenhum processo vinculado ao seu perfil ainda.</div>';
+      return;
+    }
+    lista_el.innerHTML = lista.map(p => `
+      <div class="proc-card">
+        <div>
+          <div class="codigo">${escapeHtml(p.codigo_unico)}</div>
+          <div class="meta">${p.numero_processo ? escapeHtml(p.numero_processo) : 'Sem número de processo informado'}</div>
+        </div>
+        <div class="meta">
+          ⚖️ ${p.advogado_nome ? escapeHtml(p.advogado_nome) : 'Advogado não definido'}<br>
+          🏢 ${escapeHtml(p.escritorio_nome)}
+        </div>
+      </div>
+    `).join('');
+  } catch (err) {
+    showAlert('alertaProcessosCliente', err.message, 'erro');
+  }
+}
+
+function configurarResultado(resultado, alertaNivel, mensagem) {
+  const box = document.getElementById('resultadoBox');
+  const icone = document.getElementById('resultadoIcone');
+  const titulo = document.getElementById('resultadoTitulo');
+  const msg = document.getElementById('resultadoMensagem');
+
+  box.className = 'resultado-box show';
+  if (resultado === 'confirmado') {
+    box.classList.add('verde');
+    icone.textContent = '✅';
+    titulo.textContent = 'Contato confirmado';
+  } else if (alertaNivel === 'alto') {
+    box.classList.add('vermelho');
+    icone.textContent = '🚨';
+    titulo.textContent = 'Alerta alto: possível golpe';
+  } else {
+    box.classList.add('amarelo');
+    icone.textContent = '⚠️';
+    titulo.textContent = 'Atenção';
+  }
+  msg.textContent = mensagem;
+  box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+document.getElementById('formVerificar').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  hideAlert('alertaVerificacao');
+  const btn = document.getElementById('btnVerificar');
+  setLoading(btn, true, '🔍 Verificar agora', 'Verificando...');
+
+  try {
+    const data = await apiRequest('/api/cliente/verificar', {
+      method: 'POST',
+      body: {
+        numero: document.getElementById('vNumero').value.trim(),
+        codigo: document.getElementById('vCodigo').value.trim(),
+        canal: document.getElementById('vCanal').value,
+        pediu_pagamento: document.getElementById('vPagamento').checked,
+        descricao: document.getElementById('vDescricao').value.trim()
+      }
+    });
+    configurarResultado(data.resultado, data.alerta_nivel, data.mensagem);
+  } catch (err) {
+    showAlert('alertaVerificacao', err.message, 'erro');
+  } finally {
+    setLoading(btn, false, '🔍 Verificar agora');
+  }
+});
+
+carregarProcessosCliente();
+
+document.getElementById('formSenhaCliente').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  hideAlert('alertaSenhaCliente');
+
+  const nova = document.getElementById('senhaNovaCliente').value;
+  const confirma = document.getElementById('senhaNovaClienteConfirma').value;
+  if (nova !== confirma) {
+    showAlert('alertaSenhaCliente', 'As senhas não coincidem.', 'erro');
+    return;
+  }
+
+  const btn = document.getElementById('btnTrocarSenhaCliente');
+  setLoading(btn, true, 'Salvar nova senha', 'Salvando...');
+  try {
+    const data = await apiRequest('/api/cliente/senha', {
+      method: 'POST',
+      body: {
+        senha_atual: document.getElementById('senhaAtualCliente').value,
+        nova_senha: nova
+      }
+    });
+    showAlert('alertaSenhaCliente', data.mensagem, 'sucesso');
+    document.getElementById('formSenhaCliente').reset();
+  } catch (err) {
+    showAlert('alertaSenhaCliente', err.message, 'erro');
+  } finally {
+    setLoading(btn, false, 'Salvar nova senha');
+  }
+});
+</script>
+</body>
+</html>

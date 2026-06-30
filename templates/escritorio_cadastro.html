@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cadastro do Escritório — ADVOGO SEGURO</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+<div class="auth-wrap">
+  <div class="auth-side">
+    <div class="brand" style="display:flex;align-items:center;gap:10px;font-weight:800;font-size:1.3rem;margin-bottom:30px;">
+      <span style="color:var(--dourado);font-size:1.6rem;">🛡️</span> ADVOGO SEGURO
+    </div>
+    <h2>Proteja seus clientes</h2>
+    <p>Cadastre seu escritório e comece a emitir códigos únicos de verificação para cada processo, protegendo seus clientes contra golpes em seu nome.</p>
+    <div class="trust-item"><span class="ic">✔</span><span>7 dias de teste grátis ao se cadastrar</span></div>
+    <div class="trust-item"><span class="ic">✔</span><span>Sem necessidade de cartão de crédito</span></div>
+  </div>
+
+  <div class="auth-form-col">
+    <div class="auth-card">
+      <div class="brand" style="font-weight:800; font-size:1.1rem; display:flex; gap:8px; align-items:center;">🛡️ ADVOGO SEGURO</div>
+      <div class="sub">Crie a conta do seu escritório</div>
+
+      <div id="alertaCadastro" class="alert-box"></div>
+
+      <form id="formCadastro">
+        <div class="form-group">
+          <label>Nome do escritório</label>
+          <input type="text" class="form-control" id="nome" required placeholder="Ex: Silva &amp; Associados Advocacia">
+        </div>
+        <div class="form-group">
+          <label>CNPJ</label>
+          <input type="text" class="form-control" id="cnpj" placeholder="00.000.000/0000-00">
+        </div>
+        <div class="form-group">
+          <label>E-mail</label>
+          <input type="email" class="form-control" id="email" required placeholder="contato@escritorio.com">
+        </div>
+        <div class="form-group">
+          <label>Senha</label>
+          <input type="password" class="form-control" id="senha" required minlength="6" placeholder="Mínimo 6 caracteres">
+        </div>
+        <button type="submit" class="btn-spy btn-spy-primary btn-spy-block" id="btnCadastrar">Criar conta</button>
+      </form>
+
+      <div class="auth-foot">
+        Já tem uma conta? <a href="/escritorio/login">Fazer login</a><br>
+        <a href="/" style="color:var(--texto-suave); font-weight:500;">← Voltar para o início</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/api.js') }}"></script>
+<script>
+document.getElementById('formCadastro').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  hideAlert('alertaCadastro');
+  const btn = document.getElementById('btnCadastrar');
+  setLoading(btn, true, 'Criar conta', 'Criando...');
+
+  try {
+    const data = await apiRequest('/api/escritorio/registro', {
+      method: 'POST',
+      auth: false,
+      body: {
+        nome: document.getElementById('nome').value.trim(),
+        cnpj: document.getElementById('cnpj').value.trim(),
+        email: document.getElementById('email').value.trim(),
+        senha: document.getElementById('senha').value
+      }
+    });
+    Auth.setSession(data.token, 'escritorio', data.nome, data.plano);
+    window.location.href = '/escritorio/painel';
+  } catch (err) {
+    showAlert('alertaCadastro', err.message, 'erro');
+  } finally {
+    setLoading(btn, false, 'Criar conta');
+  }
+});
+</script>
+</body>
+</html>

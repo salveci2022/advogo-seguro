@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ADVOGO SEGURO — Sistema anti-golpe do falso advogado</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+<header class="navbar-public">
+  <div class="container-narrow">
+    <div class="brand"><span class="shield">🛡️</span> ADVOGO SEGURO</div>
+    <nav>
+      <a href="/verificar">Verificar contato</a>
+      <a href="/escritorio/login">Sou Escritório</a>
+      <a href="/cliente/login">Sou Cliente</a>
+    </nav>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="container-narrow">
+    <div class="badge-trust">🛡️ Proteção oficial contra fraude de advogados</div>
+    <h1>Tenha certeza de que <span>quem te contatou</span><br>é realmente o seu advogado</h1>
+    <p class="lead">
+      O ADVOGO SEGURO é o sistema que protege clientes de escritórios de advocacia contra o golpe
+      do falso advogado: identifique em segundos se o número, e-mail ou ligação que você recebeu
+      é realmente vinculado ao processo e ao advogado responsável pelo seu caso.
+    </p>
+    <div class="hero-actions">
+      <a href="/escritorio/cadastro" class="btn-spy btn-spy-primary">🏢 Entrar como Escritório</a>
+      <a href="/cliente/login" class="btn-spy btn-spy-outline">👤 Entrar como Cliente</a>
+      <a href="/verificar" class="btn-spy btn-spy-outline">🔍 Verificar contato suspeito</a>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container-narrow">
+    <div class="section-title">
+      <h2>Como o ADVOGO SEGURO protege você</h2>
+      <p>Um elo de confiança entre escritórios de advocacia e seus clientes, sem custo de exposição de dados sensíveis.</p>
+    </div>
+    <div class="feature-grid">
+      <div class="feature-card">
+        <div class="icon-circle">🏢</div>
+        <h3>Para escritórios</h3>
+        <p>Cadastre seus advogados, processos e clientes. Cada caso recebe um código único e um número oficial verificável, reduzindo o risco de fraude em nome do seu escritório.</p>
+      </div>
+      <div class="feature-card">
+        <div class="icon-circle">🔍</div>
+        <h3>Verificação instantânea</h3>
+        <p>O cliente informa o número que entrou em contato e, em segundos, o sistema confirma se é o canal oficial do advogado responsável pelo processo.</p>
+      </div>
+      <div class="feature-card">
+        <div class="icon-circle">🚨</div>
+        <h3>Alerta de tentativas suspeitas</h3>
+        <p>Toda tentativa de contato fora do padrão oficial é registrada e enviada ao escritório, criando um histórico de possíveis fraudes contra seus clientes.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" style="background:var(--branco); border-top:1px solid var(--cinza-borda); border-bottom:1px solid var(--cinza-borda);">
+  <div class="container-narrow">
+    <div class="section-title">
+      <h2>Como funciona em 4 passos</h2>
+    </div>
+    <div class="steps">
+      <div class="step-pill"><span class="num">1</span> Escritório cadastra o processo</div>
+      <div class="step-pill"><span class="num">2</span> Cliente recebe acesso ao código único</div>
+      <div class="step-pill"><span class="num">3</span> Ao receber contato suspeito, cliente verifica</div>
+      <div class="step-pill"><span class="num">4</span> Sistema confirma ou alerta sobre golpe</div>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container-narrow" style="text-align:center;">
+    <div class="section-title">
+      <h2>Recebeu uma ligação ou mensagem de um "advogado"?</h2>
+      <p>Verifique agora mesmo, sem precisar de cadastro prévio, se o contato é confiável.</p>
+    </div>
+    <a href="/verificar" class="btn-spy btn-spy-primary" style="padding:16px 36px; font-size:1.05rem;">🔍 Verificar contato suspeito agora</a>
+  </div>
+</section>
+
+<footer class="footer-spy">
+  <div class="container-narrow">
+    ADVOGO SEGURO — Sistema anti-golpe do falso advogado<br>
+    <strong>SPYNET Tecnologia Forense &amp; Soluções Digitais Ltda.</strong> · Todos os direitos reservados.
+  </div>
+</footer>
+
+</body>
+</html>

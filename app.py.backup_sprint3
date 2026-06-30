@@ -1,0 +1,1236 @@
+# -*- coding: utf-8 -*-
+"""
+ADVOGO SEGURO — Sistema anti-golpe do falso advogado
+SPYNET Tecnologia Forense & Soluções Digitais Ltda
+
+Stack: Flask + SQLAlchemy + PostgreSQL/SQLite + JWT + Hotmart Webhook
+Padrão de arquitetura: igual SAE Fácil / NEXORA / PANIFICA PRO 360
+"""
+
+import os
+import hashlib
+import secrets
+import string
+from datetime import datetime, timedelta
+from functools import wraps
+
+from flask import Flask, request, jsonify, render_template
+from flask_sqlalchemy import SQLAlchemy
+from flask_cors import CORS
+from werkzeug.security import generate_password_hash, check_password_hash
+import jwt
+
+# ──────────────────────────────────────────────
+# CONFIGURAÇÃO BASE
+# ──────────────────────────────────────────────
+
+app = Flask(__name__)
+
+ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', '*')
+if ALLOWED_ORIGINS == '*':
+    CORS(app)  # modo aberto (dev). Em produção, defina ALLOWED_ORIGINS no .env
+else:
+    origins = [o.strip() for o in ALLOWED_ORIGINS.split(',') if o.strip()]
+    CORS(app, origins=origins, supports_credentials=True)
+
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'troque-isso-em-producao')
+app.config['JWT_SECRET'] = os.environ.get('JWT_SECRET', 'troque-isso-tambem')
+
+IS_PRODUCTION = bool(os.environ.get('RENDER') or os.environ.get('FLASK_ENV') == 'production')
+if IS_PRODUCTION and (
+    app.config['SECRET_KEY'] == 'troque-isso-em-producao' or
+    app.config['JWT_SECRET'] == 'troque-isso-tambem'
+):
+    raise RuntimeError(
+        'SECRET_KEY / JWT_SECRET não configurados em produção! '
+        'Defina essas variáveis de ambiente antes de iniciar o servidor.'
+    )
+
+DATABASE_URL = os.environ.get('DATABASE_URL', 'sqlite:///advogo_seguro.db')
+if DATABASE_URL.startswith('postgres://'):
+    DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
+app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+db = SQLAlchemy(app)
+
+ADMIN_SECRET = os.environ.get('ADMIN_SECRET', 'spynet2026admin')
+HOTMART_WEBHOOK_TOKEN = os.environ.get('HOTMART_WEBHOOK_TOKEN', '')
+RESET_TOKEN_TTL_MINUTOS = 30
+CONTATO_SEGURO_TTL_MINUTOS = int(os.environ.get('CONTATO_SEGURO_TTL_MINUTOS', '10'))
+
+
+# ──────────────────────────────────────────────
+# RATE LIMITING SIMPLES (proteção de login)
+# ──────────────────────────────────────────────
+# Implementação em memória — suficiente para uma única instância.
+# Em produção com múltiplos workers, considere Redis (flask-limiter + storage_uri).
+
+_tentativas_login = {}  # chave: (ip, identificador) -> [timestamps]
+MAX_TENTATIVAS = 5
+JANELA_BLOQUEIO_SEGUNDOS = 300  # 5 minutos
+
+
+def _chave_rate_limit(identificador):
+    ip = request.headers.get('X-Forwarded-For', request.remote_addr or 'desconhecido').split(',')[0].strip()
+    return f'{ip}:{identificador.lower()}'
+
+
+def verificar_rate_limit(identificador):
+    """Retorna (permitido: bool, segundos_restantes: int)"""
+    chave = _chave_rate_limit(identificador)
+    agora = datetime.utcnow().timestamp()
+    tentativas = [t for t in _tentativas_login.get(chave, []) if agora - t < JANELA_BLOQUEIO_SEGUNDOS]
+    _tentativas_login[chave] = tentativas
+    if len(tentativas) >= MAX_TENTATIVAS:
+        restante = int(JANELA_BLOQUEIO_SEGUNDOS - (agora - tentativas[0]))
+        return False, max(restante, 1)
+    return True, 0
+
+
+def registrar_tentativa_falha(identificador):
+    chave = _chave_rate_limit(identificador)
+    _tentativas_login.setdefault(chave, []).append(datetime.utcnow().timestamp())
+
+
+def limpar_tentativas(identificador):
+    chave = _chave_rate_limit(identificador)
+    _tentativas_login.pop(chave, None)
+
+
+# ──────────────────────────────────────────────
+# MODELOS
+# ──────────────────────────────────────────────
+
+class Escritorio(db.Model):
+    __tablename__ = 'escritorios'
+    id = db.Column(db.Integer, primary_key=True)
+    nome = db.Column(db.String(200), nullable=False)
+    cnpj = db.Column(db.String(20))
+    email = db.Column(db.String(200), unique=True, nullable=False)
+    senha_hash = db.Column(db.String(200), nullable=False)
+    plano = db.Column(db.String(20), default='trial')  # trial | pro | enterprise
+    plano_expira = db.Column(db.DateTime)
+    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+    reset_token = db.Column(db.String(100))
+    reset_token_expira = db.Column(db.DateTime)
+
+    advogados = db.relationship('Advogado', backref='escritorio', lazy=True)
+    processos = db.relationship('Processo', backref='escritorio', lazy=True)
+
+    def plano_ativo(self):
+        if self.plano in ('pro', 'enterprise'):
+            return True
+        if self.plano == 'trial' and self.plano_expira and self.plano_expira > datetime.utcnow():
+            return True
+        return False
+
+
+class Advogado(db.Model):
+    __tablename__ = 'advogados'
+    id = db.Column(db.Integer, primary_key=True)
+    escritorio_id = db.Column(db.Integer, db.ForeignKey('escritorios.id'), nullable=False)
+    nome = db.Column(db.String(200), nullable=False)
+    oab = db.Column(db.String(30))
+    telefone_oficial = db.Column(db.String(20), nullable=False)
+    foto_url = db.Column(db.String(500))
+    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class Cliente(db.Model):
+    __tablename__ = 'clientes'
+    id = db.Column(db.Integer, primary_key=True)
+    nome = db.Column(db.String(200), nullable=False)
+    telefone = db.Column(db.String(20), nullable=False)
+    email = db.Column(db.String(200))
+    senha_hash = db.Column(db.String(200), nullable=False)
+    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+    reset_token = db.Column(db.String(100))
+    reset_token_expira = db.Column(db.DateTime)
+
+    verificacoes = db.relationship('Verificacao', backref='cliente', lazy=True)
+
+
+class Processo(db.Model):
+    __tablename__ = 'processos'
+    id = db.Column(db.Integer, primary_key=True)
+    escritorio_id = db.Column(db.Integer, db.ForeignKey('escritorios.id'), nullable=False)
+    advogado_id = db.Column(db.Integer, db.ForeignKey('advogados.id'), nullable=False)
+    cliente_id = db.Column(db.Integer, db.ForeignKey('clientes.id'), nullable=False)
+    codigo_unico = db.Column(db.String(12), unique=True, nullable=False)
+    numero_processo = db.Column(db.String(60))
+    descricao = db.Column(db.String(300))
+    status = db.Column(db.String(20), default='ativo')  # ativo | arquivado
+    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+
+    advogado = db.relationship('Advogado', backref='processos', lazy=True)
+    cliente = db.relationship('Cliente', backref='processos', lazy=True)
+    tentativas = db.relationship('TentativaContato', backref='processo', lazy=True)
+
+
+class Verificacao(db.Model):
+    __tablename__ = 'verificacoes'
+    id = db.Column(db.Integer, primary_key=True)
+    cliente_id = db.Column(db.Integer, db.ForeignKey('clientes.id'), nullable=False)
+    numero_consultado = db.Column(db.String(20), nullable=False)
+    codigo_consultado = db.Column(db.String(12))
+    resultado = db.Column(db.String(20))  # confirmado | nao_encontrado | numero_diferente
+    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class TentativaContato(db.Model):
+    __tablename__ = 'tentativas_contato'
+    id = db.Column(db.Integer, primary_key=True)
+    processo_id = db.Column(db.Integer, db.ForeignKey('processos.id'), nullable=False)
+    numero_suspeito = db.Column(db.String(20))
+    canal = db.Column(db.String(30))  # whatsapp | ligacao | videochamada | email
+    descricao = db.Column(db.String(500))
+    confirmado_golpe = db.Column(db.Boolean, default=False)
+    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class ContatoSeguro(db.Model):
+    """
+    'Contato Seguro ADVOGO' / Código de Contato Autorizado (CCA).
+
+    O escritório gera este código ANTES de ligar/mensagear o cliente.
+    O cliente nunca recebe nem digita o código — ele apenas consulta,
+    em canal separado, se existe um contato autorizado ativo no momento.
+    """
+    __tablename__ = 'contatos_seguros'
+    id = db.Column(db.Integer, primary_key=True)
+    escritorio_id = db.Column(db.Integer, db.ForeignKey('escritorios.id'), nullable=False)
+    advogado_id = db.Column(db.Integer, db.ForeignKey('advogados.id'), nullable=False)
+    cliente_id = db.Column(db.Integer, db.ForeignKey('clientes.id'), nullable=False)
+    processo_id = db.Column(db.Integer, db.ForeignKey('processos.id'), nullable=True)
+    codigo_cca = db.Column(db.String(20), unique=True, nullable=False)
+    canal = db.Column(db.String(30), nullable=False)  # whatsapp | ligacao | videochamada | email
+    status = db.Column(db.String(20), default='ativo')  # ativo | expirado | usado | cancelado
+    expira_em = db.Column(db.DateTime, nullable=False)
+    usado_em = db.Column(db.DateTime)
+    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+
+    escritorio = db.relationship('Escritorio')
+    advogado = db.relationship('Advogado')
+    cliente = db.relationship('Cliente')
+    processo = db.relationship('Processo')
+
+    def status_atual(self):
+        """Recalcula o status no momento da leitura, sem nunca tratar um código vencido como válido."""
+        if self.status in ('cancelado', 'expirado'):
+            return self.status
+        if self.expira_em < datetime.utcnow():
+            return 'expirado'
+        return self.status
+
+
+class ContatoSeguroLog(db.Model):
+    """Log de auditoria de toda consulta feita pelo cliente (mesmo quando não há contato ativo)."""
+    __tablename__ = 'contatos_seguros_logs'
+    id = db.Column(db.Integer, primary_key=True)
+    cliente_id = db.Column(db.Integer, db.ForeignKey('clientes.id'), nullable=False)
+    contato_seguro_id = db.Column(db.Integer, db.ForeignKey('contatos_seguros.id'), nullable=True)
+    encontrado_ativo = db.Column(db.Boolean, default=False)
+    ip = db.Column(db.String(60))
+    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+# ──────────────────────────────────────────────
+# UTILITÁRIOS
+# ──────────────────────────────────────────────
+
+def hash_senha(senha):
+    """Hash seguro com salt (PBKDF2-SHA256, via Werkzeug)."""
+    return generate_password_hash(senha, method='pbkdf2:sha256', salt_length=16)
+
+
+def verificar_senha(senha_hash_salva, senha_digitada):
+    """
+    Confere a senha contra o hash salvo.
+    Compatível com hashes antigos em SHA-256 puro (sem salt) gerados antes
+    desta atualização de segurança — eles são automaticamente re-hasheados
+    para PBKDF2 no primeiro login correto.
+    """
+    if senha_hash_salva and len(senha_hash_salva) == 64 and ':' not in senha_hash_salva:
+        # formato legado: sha256 hex puro
+        return hashlib.sha256(senha_digitada.encode()).hexdigest() == senha_hash_salva
+    try:
+        return check_password_hash(senha_hash_salva, senha_digitada)
+    except Exception:
+        return False
+
+
+def gerar_token_reset():
+    return secrets.token_urlsafe(32)
+
+
+def gerar_codigo_cca():
+    """Gera um código curto único no formato CCA-NNNN, só visível ao escritório."""
+    while True:
+        numero = ''.join(secrets.choice(string.digits) for _ in range(4))
+        codigo = f'CCA-{numero}'
+        if not ContatoSeguro.query.filter_by(codigo_cca=codigo).first():
+            return codigo
+
+
+def gerar_codigo_unico():
+    while True:
+        codigo = ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(8))
+        if not Processo.query.filter_by(codigo_unico=codigo).first():
+            return codigo
+
+
+def gerar_token(payload, dias=30):
+    payload = dict(payload)
+    payload['exp'] = datetime.utcnow() + timedelta(days=dias)
+    return jwt.encode(payload, app.config['JWT_SECRET'], algorithm='HS256')
+
+
+def decodificar_token(token):
+    try:
+        return jwt.decode(token, app.config['JWT_SECRET'], algorithms=['HS256'])
+    except Exception:
+        return None
+
+
+def login_escritorio_obrigatorio(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        auth = request.headers.get('Authorization', '')
+        token = auth.replace('Bearer ', '') if auth.startswith('Bearer ') else None
+        dados = decodificar_token(token) if token else None
+        if not dados or dados.get('tipo') != 'escritorio':
+            return jsonify({'erro': 'Não autenticado'}), 401
+        escritorio = Escritorio.query.get(dados['id'])
+        if not escritorio:
+            return jsonify({'erro': 'Escritório não encontrado'}), 404
+        request.escritorio = escritorio
+        return f(*args, **kwargs)
+    return wrapper
+
+
+def login_cliente_obrigatorio(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        auth = request.headers.get('Authorization', '')
+        token = auth.replace('Bearer ', '') if auth.startswith('Bearer ') else None
+        dados = decodificar_token(token) if token else None
+        if not dados or dados.get('tipo') != 'cliente':
+            return jsonify({'erro': 'Não autenticado'}), 401
+        cliente = Cliente.query.get(dados['id'])
+        if not cliente:
+            return jsonify({'erro': 'Cliente não encontrado'}), 404
+        request.cliente = cliente
+        return f(*args, **kwargs)
+    return wrapper
+
+
+@app.route('/api/escritorio/senha', methods=['POST'])
+@login_escritorio_obrigatorio
+def trocar_senha_escritorio():
+    data = request.get_json() or {}
+    senha_atual = data.get('senha_atual', '')
+    nova_senha = data.get('nova_senha', '')
+
+    if not verificar_senha(request.escritorio.senha_hash, senha_atual):
+        return jsonify({'erro': 'Senha atual incorreta'}), 401
+    if len(nova_senha) < 6:
+        return jsonify({'erro': 'A nova senha deve ter no mínimo 6 caracteres'}), 400
+
+    request.escritorio.senha_hash = hash_senha(nova_senha)
+    db.session.commit()
+    return jsonify({'ok': True, 'mensagem': 'Senha alterada com sucesso'})
+
+
+@app.route('/api/escritorio/esqueci-senha', methods=['POST'])
+def esqueci_senha_escritorio():
+    data = request.get_json() or {}
+    email = data.get('email', '').strip().lower()
+    escritorio = Escritorio.query.filter_by(email=email).first()
+
+    # Resposta genérica sempre (não revela se o e-mail existe, por segurança)
+    resposta = {'ok': True, 'mensagem': 'Se o e-mail existir em nossa base, um link de redefinição foi enviado.'}
+
+    if escritorio:
+        escritorio.reset_token = gerar_token_reset()
+        escritorio.reset_token_expira = datetime.utcnow() + timedelta(minutes=RESET_TOKEN_TTL_MINUTOS)
+        db.session.commit()
+        # TODO: integrar envio real por e-mail (SMTP/SendGrid). Por enquanto,
+        # o link pode ser obtido pelo admin em /api/admin/reset-links/<secret>/<email>
+        link = f"/redefinir-senha?tipo=escritorio&token={escritorio.reset_token}"
+        resposta['link_dev'] = link  # ⚠️ remover este campo quando o envio por e-mail estiver configurado
+
+    return jsonify(resposta)
+
+
+@app.route('/api/escritorio/redefinir-senha', methods=['POST'])
+def redefinir_senha_escritorio():
+    data = request.get_json() or {}
+    token = data.get('token', '')
+    nova_senha = data.get('nova_senha', '')
+
+    escritorio = Escritorio.query.filter_by(reset_token=token).first()
+    if not escritorio or not escritorio.reset_token_expira or escritorio.reset_token_expira < datetime.utcnow():
+        return jsonify({'erro': 'Link de redefinição inválido ou expirado. Solicite um novo.'}), 400
+    if len(nova_senha) < 6:
+        return jsonify({'erro': 'A nova senha deve ter no mínimo 6 caracteres'}), 400
+
+    escritorio.senha_hash = hash_senha(nova_senha)
+    escritorio.reset_token = None
+    escritorio.reset_token_expira = None
+    db.session.commit()
+    return jsonify({'ok': True, 'mensagem': 'Senha redefinida com sucesso. Faça login com a nova senha.'})
+
+
+@app.route('/api/cliente/senha', methods=['POST'])
+@login_cliente_obrigatorio
+def trocar_senha_cliente():
+    data = request.get_json() or {}
+    senha_atual = data.get('senha_atual', '')
+    nova_senha = data.get('nova_senha', '')
+
+    if not verificar_senha(request.cliente.senha_hash, senha_atual):
+        return jsonify({'erro': 'Senha atual incorreta'}), 401
+    if len(nova_senha) < 6:
+        return jsonify({'erro': 'A nova senha deve ter no mínimo 6 caracteres'}), 400
+
+    request.cliente.senha_hash = hash_senha(nova_senha)
+    db.session.commit()
+    return jsonify({'ok': True, 'mensagem': 'Senha alterada com sucesso'})
+
+
+@app.route('/api/cliente/esqueci-senha', methods=['POST'])
+def esqueci_senha_cliente():
+    """
+    Como o cliente não usa e-mail para login, o reset gera um token que o
+    PRÓPRIO ESCRITÓRIO consegue ver na tela de Processos (vinculado ao cliente)
+    e reenviar manualmente por WhatsApp. Integração automática via Z-API pode
+    ser plugada depois em envio_whatsapp_reset().
+    """
+    data = request.get_json() or {}
+    telefone = ''.join(filter(str.isdigit, data.get('telefone', '')))
+    cliente = Cliente.query.filter_by(telefone=telefone).first()
+
+    resposta = {'ok': True, 'mensagem': 'Se o telefone existir em nossa base, o escritório responsável poderá te enviar um novo acesso.'}
+    if cliente:
+        cliente.reset_token = gerar_token_reset()
+        cliente.reset_token_expira = datetime.utcnow() + timedelta(minutes=RESET_TOKEN_TTL_MINUTOS)
+        db.session.commit()
+
+    return jsonify(resposta)
+
+
+@app.route('/api/cliente/redefinir-senha', methods=['POST'])
+def redefinir_senha_cliente():
+    data = request.get_json() or {}
+    token = data.get('token', '')
+    nova_senha = data.get('nova_senha', '')
+
+    cliente = Cliente.query.filter_by(reset_token=token).first()
+    if not cliente or not cliente.reset_token_expira or cliente.reset_token_expira < datetime.utcnow():
+        return jsonify({'erro': 'Link de redefinição inválido ou expirado. Solicite um novo ao seu escritório.'}), 400
+    if len(nova_senha) < 6:
+        return jsonify({'erro': 'A nova senha deve ter no mínimo 6 caracteres'}), 400
+
+    cliente.senha_hash = hash_senha(nova_senha)
+    cliente.reset_token = None
+    cliente.reset_token_expira = None
+    db.session.commit()
+    return jsonify({'ok': True, 'mensagem': 'Senha redefinida com sucesso. Faça login com a nova senha.'})
+
+
+@app.route('/api/escritorio/cliente/<int:cliente_id>/link-reset', methods=['GET'])
+@login_escritorio_obrigatorio
+def gerar_link_reset_cliente(cliente_id):
+    """Permite ao escritório gerar/copiar um link de redefinição para reenviar ao cliente por WhatsApp."""
+    processo = Processo.query.filter_by(cliente_id=cliente_id, escritorio_id=request.escritorio.id).first()
+    if not processo:
+        return jsonify({'erro': 'Cliente não encontrado neste escritório'}), 404
+
+    cliente = processo.cliente
+    cliente.reset_token = gerar_token_reset()
+    cliente.reset_token_expira = datetime.utcnow() + timedelta(minutes=RESET_TOKEN_TTL_MINUTOS)
+    db.session.commit()
+
+    return jsonify({'link': f"/redefinir-senha?tipo=cliente&token={cliente.reset_token}", 'cliente_nome': cliente.nome})
+
+
+# ──────────────────────────────────────────────
+# ROTAS — ESCRITÓRIO (B2B)
+# ──────────────────────────────────────────────
+
+@app.route('/api/escritorio/registro', methods=['POST'])
+def registro_escritorio():
+    data = request.get_json() or {}
+    nome = data.get('nome', '').strip()
+    email = data.get('email', '').strip().lower()
+    senha = data.get('senha', '')
+    cnpj = data.get('cnpj', '').strip()
+
+    if not nome or not email or len(senha) < 6:
+        return jsonify({'erro': 'Preencha nome, email e senha (mín. 6 caracteres)'}), 400
+
+    if Escritorio.query.filter_by(email=email).first():
+        return jsonify({'erro': 'Email já cadastrado'}), 409
+
+    escritorio = Escritorio(
+        nome=nome, email=email, cnpj=cnpj,
+        senha_hash=hash_senha(senha),
+        plano='trial',
+        plano_expira=datetime.utcnow() + timedelta(days=7)
+    )
+    db.session.add(escritorio)
+    db.session.commit()
+
+    token = gerar_token({'id': escritorio.id, 'tipo': 'escritorio'})
+    return jsonify({
+        'token': token, 'nome': escritorio.nome,
+        'plano': escritorio.plano, 'plano_ativo': escritorio.plano_ativo()
+    })
+
+
+@app.route('/api/escritorio/login', methods=['POST'])
+def login_escritorio():
+    data = request.get_json() or {}
+    email = data.get('email', '').strip().lower()
+    senha = data.get('senha', '')
+
+    permitido, espera = verificar_rate_limit(email)
+    if not permitido:
+        return jsonify({'erro': f'Muitas tentativas de login. Tente novamente em {espera} segundos.'}), 429
+
+    escritorio = Escritorio.query.filter_by(email=email).first()
+    if not escritorio or not verificar_senha(escritorio.senha_hash, senha):
+        registrar_tentativa_falha(email)
+        return jsonify({'erro': 'Email ou senha incorretos'}), 401
+
+    limpar_tentativas(email)
+    # upgrade silencioso de hash legado (sha256) para PBKDF2
+    if len(escritorio.senha_hash) == 64 and ':' not in escritorio.senha_hash:
+        escritorio.senha_hash = hash_senha(senha)
+        db.session.commit()
+
+    token = gerar_token({'id': escritorio.id, 'tipo': 'escritorio'})
+    return jsonify({
+        'token': token, 'nome': escritorio.nome,
+        'plano': escritorio.plano, 'plano_ativo': escritorio.plano_ativo()
+    })
+
+
+@app.route('/api/escritorio/advogados', methods=['GET', 'POST'])
+@login_escritorio_obrigatorio
+def advogados():
+    if request.method == 'POST':
+        data = request.get_json() or {}
+        adv = Advogado(
+            escritorio_id=request.escritorio.id,
+            nome=data.get('nome', '').strip(),
+            oab=data.get('oab', '').strip(),
+            telefone_oficial=data.get('telefone_oficial', '').strip(),
+            foto_url=data.get('foto_url', '')
+        )
+        db.session.add(adv)
+        db.session.commit()
+        return jsonify({'id': adv.id, 'nome': adv.nome})
+
+    lista = Advogado.query.filter_by(escritorio_id=request.escritorio.id).all()
+    return jsonify([{
+        'id': a.id, 'nome': a.nome, 'oab': a.oab,
+        'telefone_oficial': a.telefone_oficial, 'foto_url': a.foto_url
+    } for a in lista])
+
+
+@app.route('/api/escritorio/advogados/<int:advogado_id>', methods=['PUT', 'DELETE'])
+@login_escritorio_obrigatorio
+def advogado_detalhe(advogado_id):
+    adv = Advogado.query.filter_by(id=advogado_id, escritorio_id=request.escritorio.id).first()
+    if not adv:
+        return jsonify({'erro': 'Advogado não encontrado'}), 404
+
+    if request.method == 'DELETE':
+        if Processo.query.filter_by(advogado_id=adv.id).first():
+            return jsonify({'erro': 'Não é possível excluir: este advogado possui processos vinculados.'}), 409
+        db.session.delete(adv)
+        db.session.commit()
+        return jsonify({'ok': True})
+
+    data = request.get_json() or {}
+    adv.nome = data.get('nome', adv.nome).strip()
+    adv.oab = data.get('oab', adv.oab)
+    adv.telefone_oficial = data.get('telefone_oficial', adv.telefone_oficial).strip()
+    adv.foto_url = data.get('foto_url', adv.foto_url)
+    db.session.commit()
+    return jsonify({'id': adv.id, 'nome': adv.nome})
+
+
+@app.route('/api/escritorio/processos', methods=['GET', 'POST'])
+@login_escritorio_obrigatorio
+def processos():
+    if not request.escritorio.plano_ativo():
+        return jsonify({'erro': 'Plano inativo. Assine para continuar.', 'limite': True}), 403
+
+    if request.method == 'POST':
+        data = request.get_json() or {}
+
+        telefone_normalizado = ''.join(filter(str.isdigit, data.get('cliente_telefone', '')))
+        cliente = Cliente.query.filter_by(telefone=telefone_normalizado).first()
+        senha_temp = None
+        if not cliente:
+            senha_temp = secrets.token_hex(4)
+            cliente = Cliente(
+                nome=data.get('cliente_nome', '').strip(),
+                telefone=telefone_normalizado,
+                email=data.get('cliente_email', '').strip(),
+                senha_hash=hash_senha(senha_temp)
+            )
+            db.session.add(cliente)
+            db.session.flush()
+
+        processo = Processo(
+            escritorio_id=request.escritorio.id,
+            advogado_id=data.get('advogado_id'),
+            cliente_id=cliente.id,
+            codigo_unico=gerar_codigo_unico(),
+            numero_processo=data.get('numero_processo', '').strip(),
+            descricao=data.get('descricao', '').strip()
+        )
+        db.session.add(processo)
+        db.session.commit()
+
+        return jsonify({
+            'id': processo.id,
+            'codigo_unico': processo.codigo_unico,
+            'cliente_id': cliente.id,
+            'cliente_nome': cliente.nome,
+            'senha_temporaria': senha_temp
+        })
+
+    lista = Processo.query.filter_by(escritorio_id=request.escritorio.id).order_by(Processo.criado_em.desc()).all()
+    return jsonify([{
+        'id': p.id, 'codigo_unico': p.codigo_unico, 'numero_processo': p.numero_processo,
+        'descricao': p.descricao, 'status': p.status,
+        'cliente_id': p.cliente_id, 'advogado_id': p.advogado_id,
+        'cliente_nome': p.cliente.nome, 'advogado_nome': p.advogado.nome if p.advogado else None,
+        'criado_em': p.criado_em.strftime('%d/%m/%Y')
+    } for p in lista])
+
+
+@app.route('/api/escritorio/processos/<int:processo_id>', methods=['PUT', 'DELETE'])
+@login_escritorio_obrigatorio
+def processo_detalhe(processo_id):
+    processo = Processo.query.filter_by(id=processo_id, escritorio_id=request.escritorio.id).first()
+    if not processo:
+        return jsonify({'erro': 'Processo não encontrado'}), 404
+
+    if request.method == 'DELETE':
+        TentativaContato.query.filter_by(processo_id=processo.id).delete()
+        db.session.delete(processo)
+        db.session.commit()
+        return jsonify({'ok': True})
+
+    data = request.get_json() or {}
+    if 'numero_processo' in data:
+        processo.numero_processo = data['numero_processo'].strip()
+    if 'descricao' in data:
+        processo.descricao = data['descricao'].strip()
+    if 'advogado_id' in data and data['advogado_id']:
+        processo.advogado_id = data['advogado_id']
+    if 'status' in data and data['status'] in ('ativo', 'arquivado'):
+        processo.status = data['status']
+    db.session.commit()
+    return jsonify({'id': processo.id, 'ok': True})
+
+
+@app.route('/api/escritorio/tentativas', methods=['GET'])
+@login_escritorio_obrigatorio
+def listar_tentativas():
+    processos_ids = [p.id for p in Processo.query.filter_by(escritorio_id=request.escritorio.id).all()]
+    tentativas = TentativaContato.query.filter(
+        TentativaContato.processo_id.in_(processos_ids)
+    ).order_by(TentativaContato.criado_em.desc()).limit(100).all()
+
+    return jsonify([{
+        'id': t.id, 'numero_suspeito': t.numero_suspeito, 'canal': t.canal,
+        'descricao': t.descricao, 'confirmado_golpe': t.confirmado_golpe,
+        'processo_codigo': t.processo.codigo_unico,
+        'cliente_nome': t.processo.cliente.nome,
+        'criado_em': t.criado_em.strftime('%d/%m/%Y %H:%M')
+    } for t in tentativas])
+
+
+# ──────────────────────────────────────────────
+# CONTATO SEGURO ADVOGO — Código de Contato Autorizado (CCA)
+# ──────────────────────────────────────────────
+
+CANAIS_VALIDOS = ('whatsapp', 'ligacao', 'videochamada', 'email')
+LABEL_CANAL = {
+    'whatsapp': 'WhatsApp',
+    'ligacao': 'ligação',
+    'videochamada': 'videochamada',
+    'email': 'e-mail'
+}
+
+
+def _serializar_cca_escritorio(c):
+    """Serialização para o painel do escritório — aqui sim o código é exibido."""
+    return {
+        'id': c.id,
+        'codigo_cca': c.codigo_cca,
+        'advogado_nome': c.advogado.nome if c.advogado else None,
+        'cliente_nome': c.cliente.nome if c.cliente else None,
+        'processo_codigo': c.processo.codigo_unico if c.processo else None,
+        'canal': c.canal,
+        'status': c.status_atual(),
+        'expira_em': c.expira_em.strftime('%d/%m/%Y %H:%M:%S'),
+        'usado_em': c.usado_em.strftime('%d/%m/%Y %H:%M:%S') if c.usado_em else None,
+        'criado_em': c.criado_em.strftime('%d/%m/%Y %H:%M:%S')
+    }
+
+
+@app.route('/api/escritorio/contato-seguro/iniciar', methods=['POST'])
+@login_escritorio_obrigatorio
+def iniciar_contato_seguro():
+    """
+    Gera um Código de Contato Autorizado (CCA) ANTES do advogado ligar/mensagear
+    o cliente. O código nunca é informado ao cliente — ele só serve de registro
+    interno consultado automaticamente pelo lado do cliente.
+    """
+    data = request.get_json() or {}
+    advogado_id = data.get('advogado_id')
+    cliente_id = data.get('cliente_id')
+    processo_id = data.get('processo_id')
+    canal = data.get('canal', 'whatsapp')
+
+    if canal not in CANAIS_VALIDOS:
+        return jsonify({'erro': 'Canal inválido. Use whatsapp, ligacao, videochamada ou email.'}), 400
+
+    advogado = Advogado.query.filter_by(id=advogado_id, escritorio_id=request.escritorio.id).first()
+    if not advogado:
+        return jsonify({'erro': 'Advogado não encontrado neste escritório.'}), 404
+
+    # cliente pode ser informado diretamente ou inferido a partir do processo
+    processo = None
+    if processo_id:
+        processo = Processo.query.filter_by(id=processo_id, escritorio_id=request.escritorio.id).first()
+        if not processo:
+            return jsonify({'erro': 'Processo não encontrado neste escritório.'}), 404
+        cliente_id = processo.cliente_id
+
+    cliente = Cliente.query.filter_by(id=cliente_id).first()
+    if not cliente:
+        return jsonify({'erro': 'Cliente não encontrado.'}), 404
+
+    # garante que o cliente pertence de fato a algum processo deste escritório
+    vinculo = Processo.query.filter_by(escritorio_id=request.escritorio.id, cliente_id=cliente.id).first()
+    if not vinculo:
+        return jsonify({'erro': 'Este cliente não está vinculado ao seu escritório.'}), 403
+    if not processo:
+        processo = vinculo
+
+    # cancela automaticamente qualquer CCA ainda ativo deste advogado com este cliente,
+    # para nunca haver dois códigos simultâneos válidos
+    antigos_ativos = ContatoSeguro.query.filter_by(
+        escritorio_id=request.escritorio.id, advogado_id=advogado.id, cliente_id=cliente.id, status='ativo'
+    ).all()
+    for antigo in antigos_ativos:
+        antigo.status = 'cancelado'
+
+    contato = ContatoSeguro(
+        escritorio_id=request.escritorio.id,
+        advogado_id=advogado.id,
+        cliente_id=cliente.id,
+        processo_id=processo.id if processo else None,
+        codigo_cca=gerar_codigo_cca(),
+        canal=canal,
+        status='ativo',
+        expira_em=datetime.utcnow() + timedelta(minutes=CONTATO_SEGURO_TTL_MINUTOS)
+    )
+    db.session.add(contato)
+    db.session.commit()
+
+    return jsonify(_serializar_cca_escritorio(contato))
+
+
+@app.route('/api/escritorio/contato-seguro/listar', methods=['GET'])
+@login_escritorio_obrigatorio
+def listar_contato_seguro():
+    lista = ContatoSeguro.query.filter_by(escritorio_id=request.escritorio.id) \
+        .order_by(ContatoSeguro.criado_em.desc()).limit(100).all()
+    return jsonify([_serializar_cca_escritorio(c) for c in lista])
+
+
+@app.route('/api/escritorio/contato-seguro/cancelar/<int:contato_id>', methods=['POST'])
+@login_escritorio_obrigatorio
+def cancelar_contato_seguro(contato_id):
+    contato = ContatoSeguro.query.filter_by(id=contato_id, escritorio_id=request.escritorio.id).first()
+    if not contato:
+        return jsonify({'erro': 'Contato seguro não encontrado.'}), 404
+    if contato.status_atual() != 'ativo':
+        return jsonify({'erro': 'Este contato já não está mais ativo.'}), 409
+
+    contato.status = 'cancelado'
+    db.session.commit()
+    return jsonify({'ok': True})
+
+
+# ──────────────────────────────────────────────
+# ROTAS — CLIENTE FINAL (B2C)
+# ──────────────────────────────────────────────
+
+@app.route('/api/cliente/login', methods=['POST'])
+def login_cliente():
+    data = request.get_json() or {}
+    telefone = ''.join(filter(str.isdigit, data.get('telefone', '')))
+    senha = data.get('senha', '')
+
+    permitido, espera = verificar_rate_limit(telefone)
+    if not permitido:
+        return jsonify({'erro': f'Muitas tentativas de login. Tente novamente em {espera} segundos.'}), 429
+
+    cliente = Cliente.query.filter_by(telefone=telefone).first()
+    if not cliente or not verificar_senha(cliente.senha_hash, senha):
+        registrar_tentativa_falha(telefone)
+        return jsonify({'erro': 'Telefone ou senha incorretos'}), 401
+
+    limpar_tentativas(telefone)
+    if len(cliente.senha_hash) == 64 and ':' not in cliente.senha_hash:
+        cliente.senha_hash = hash_senha(senha)
+        db.session.commit()
+
+    token = gerar_token({'id': cliente.id, 'tipo': 'cliente'})
+    return jsonify({'token': token, 'nome': cliente.nome})
+
+
+@app.route('/api/cliente/processos', methods=['GET'])
+@login_cliente_obrigatorio
+def processos_do_cliente():
+    lista = Processo.query.filter_by(cliente_id=request.cliente.id, status='ativo').all()
+    return jsonify([{
+        'id': p.id, 'codigo_unico': p.codigo_unico, 'numero_processo': p.numero_processo,
+        'advogado_nome': p.advogado.nome if p.advogado else None,
+        'escritorio_nome': p.escritorio.nome
+    } for p in lista])
+
+
+# ──────────────────────────────────────────────
+# CONTATO SEGURO ADVOGO — lado do cliente
+# ──────────────────────────────────────────────
+
+def _ip_cliente():
+    return request.headers.get('X-Forwarded-For', request.remote_addr or '').split(',')[0].strip()
+
+
+@app.route('/api/cliente/contato-seguro/ativo', methods=['GET'])
+@login_cliente_obrigatorio
+def contato_seguro_ativo():
+    """
+    O cliente nunca informa nada aqui — só consulta. Retorna o contato autorizado
+    ativo mais recente para ele, se existir, sem nunca aceitar um código vencido.
+    """
+    agora = datetime.utcnow()
+    contato = ContatoSeguro.query.filter_by(cliente_id=request.cliente.id, status='ativo') \
+        .filter(ContatoSeguro.expira_em > agora) \
+        .order_by(ContatoSeguro.criado_em.desc()).first()
+
+    # auditoria: toda consulta é registrada, mesmo sem resultado
+    db.session.add(ContatoSeguroLog(
+        cliente_id=request.cliente.id,
+        contato_seguro_id=contato.id if contato else None,
+        encontrado_ativo=bool(contato),
+        ip=_ip_cliente()
+    ))
+
+    if contato and not contato.usado_em:
+        contato.usado_em = agora
+    db.session.commit()
+
+    if not contato:
+        return jsonify({'ativo': False})
+
+    return jsonify({
+        'ativo': True,
+        'advogado_nome': contato.advogado.nome if contato.advogado else 'seu advogado',
+        'escritorio_nome': contato.escritorio.nome if contato.escritorio else None,
+        'canal': contato.canal,
+        'iniciado_em': contato.criado_em.strftime('%H:%M'),
+        'expira_em': contato.expira_em.strftime('%H:%M')
+    })
+
+
+@app.route('/api/cliente/contato-seguro/verificar', methods=['POST'])
+@login_cliente_obrigatorio
+def contato_seguro_verificar():
+    """
+    Mesma lógica de /ativo, mas pensada para o botão 'Verificar contato agora'
+    e que também aceita o sinalizador de pedido de pagamento, elevando o risco.
+    """
+    data = request.get_json() or {}
+    pediu_pagamento = bool(data.get('pediu_pagamento', False))
+
+    agora = datetime.utcnow()
+    contato = ContatoSeguro.query.filter_by(cliente_id=request.cliente.id, status='ativo') \
+        .filter(ContatoSeguro.expira_em > agora) \
+        .order_by(ContatoSeguro.criado_em.desc()).first()
+
+    db.session.add(ContatoSeguroLog(
+        cliente_id=request.cliente.id,
+        contato_seguro_id=contato.id if contato else None,
+        encontrado_ativo=bool(contato),
+        ip=_ip_cliente()
+    ))
+    if contato and not contato.usado_em:
+        contato.usado_em = agora
+
+    if contato:
+        resultado = 'confirmado'
+        alerta_nivel = 'nenhum'
+        mensagem = (
+            f'Contato confirmado. Este contato foi iniciado por {contato.advogado.nome} '
+            f'({contato.escritorio.nome}) às {contato.criado_em.strftime("%H:%M")} pelo canal '
+            f'{LABEL_CANAL.get(contato.canal, contato.canal)}. Mesmo assim, nunca envie dinheiro '
+            f'sem confirmar novamente pelo canal oficial do escritório.'
+        )
+        if pediu_pagamento:
+            mensagem += (' ⚠️ Atenção: mesmo com contato confirmado, advogados não pedem pagamento '
+                         'via Pix/transferência para liberar valores de processo.')
+            alerta_nivel = 'medio'
+    else:
+        resultado = 'nao_encontrado'
+        alerta_nivel = 'alto'
+        mensagem = ('Não existe contato autorizado neste momento. Não envie dinheiro, não mande '
+                    'documentos e não continue a conversa. Pode ser tentativa de golpe.')
+        if pediu_pagamento:
+            alerta_nivel = 'alto'
+
+        # registra automaticamente como tentativa suspeita no primeiro processo ativo do cliente
+        processo_ref = Processo.query.filter_by(cliente_id=request.cliente.id).order_by(Processo.criado_em.desc()).first()
+        if processo_ref:
+            db.session.add(TentativaContato(
+                processo_id=processo_ref.id,
+                canal=data.get('canal', 'whatsapp'),
+                descricao='Cliente verificou Contato Seguro e NÃO havia CCA ativo no momento.',
+                confirmado_golpe=pediu_pagamento
+            ))
+
+    db.session.commit()
+    return jsonify({'resultado': resultado, 'alerta_nivel': alerta_nivel, 'mensagem': mensagem})
+
+
+@app.route('/api/cliente/contato-seguro/registrar-suspeita', methods=['POST'])
+@login_cliente_obrigatorio
+def contato_seguro_registrar_suspeita():
+    """Botão 'Registrar tentativa suspeita' na área do cliente — não exige contato ativo nem dados sensíveis."""
+    data = request.get_json() or {}
+    processo_ref = Processo.query.filter_by(cliente_id=request.cliente.id).order_by(Processo.criado_em.desc()).first()
+    if not processo_ref:
+        return jsonify({'erro': 'Nenhum processo vinculado ao seu cadastro para registrar a tentativa.'}), 404
+
+    db.session.add(TentativaContato(
+        processo_id=processo_ref.id,
+        numero_suspeito=data.get('numero', ''),
+        canal=data.get('canal', 'whatsapp'),
+        descricao=data.get('descricao', 'Tentativa suspeita registrada pelo cliente via Contato Seguro.'),
+        confirmado_golpe=True
+    ))
+    db.session.commit()
+    return jsonify({'ok': True, 'mensagem': 'Tentativa suspeita registrada. Seu escritório foi notificado no painel.'})
+
+
+@app.route('/api/cliente/verificar', methods=['POST'])
+@login_cliente_obrigatorio
+def verificar_contato():
+    """
+    Núcleo do produto: cliente cola o número que entrou em contato
+    (ou o código do caso) e o sistema confirma se é legítimo.
+    """
+    data = request.get_json() or {}
+    numero = ''.join(filter(str.isdigit, data.get('numero', '')))
+    codigo = data.get('codigo', '').strip().upper()
+    canal = data.get('canal', 'whatsapp')
+    pediu_pagamento = data.get('pediu_pagamento', False)
+
+    processo = None
+    if codigo:
+        processo = Processo.query.filter_by(
+            codigo_unico=codigo, cliente_id=request.cliente.id
+        ).first()
+
+    if not processo:
+        processos_cliente = Processo.query.filter_by(cliente_id=request.cliente.id).all()
+        for p in processos_cliente:
+            if p.advogado and ''.join(filter(str.isdigit, p.advogado.telefone_oficial)) == numero:
+                processo = p
+                break
+
+    resultado = 'nao_encontrado'
+    mensagem = 'Não encontramos esse contato vinculado aos seus processos. Atenção: pode ser tentativa de golpe.'
+    alerta_nivel = 'alto'
+
+    if processo:
+        numero_oficial = ''.join(filter(str.isdigit, processo.advogado.telefone_oficial)) if processo.advogado else ''
+        if numero == numero_oficial:
+            resultado = 'confirmado'
+            mensagem = f'Confirmado! Este é o número oficial de {processo.advogado.nome} ({processo.escritorio.nome}).'
+            alerta_nivel = 'nenhum'
+        else:
+            resultado = 'numero_diferente'
+            mensagem = f'Atenção: o código do processo é válido, mas esse número NÃO é o oficial de {processo.advogado.nome}. Pode ser golpe.'
+            alerta_nivel = 'alto'
+
+    if pediu_pagamento:
+        mensagem += ' ⚠️ Advogados não pedem pagamento via Pix/transferência para liberar valores de processo. Isso é sinal forte de golpe.'
+        alerta_nivel = 'alto'
+
+    verificacao = Verificacao(
+        cliente_id=request.cliente.id,
+        numero_consultado=numero,
+        codigo_consultado=codigo,
+        resultado=resultado
+    )
+    db.session.add(verificacao)
+
+    if processo and resultado != 'confirmado':
+        tentativa = TentativaContato(
+            processo_id=processo.id,
+            numero_suspeito=numero,
+            canal=canal,
+            descricao=data.get('descricao', ''),
+            confirmado_golpe=(resultado == 'numero_diferente')
+        )
+        db.session.add(tentativa)
+
+    db.session.commit()
+
+    return jsonify({
+        'resultado': resultado,
+        'mensagem': mensagem,
+        'alerta_nivel': alerta_nivel
+    })
+
+
+# ──────────────────────────────────────────────
+# VERIFICAÇÃO PÚBLICA (sem login — landing page)
+# ──────────────────────────────────────────────
+
+@app.route('/api/publico/verificar', methods=['POST'])
+def verificar_contato_publico():
+    """
+    Verificação rápida sem necessidade de login do cliente.
+    Requer o código do processo (compartilhado pelo escritório) + número de contato.
+    """
+    data = request.get_json() or {}
+    numero = ''.join(filter(str.isdigit, data.get('numero', '')))
+    codigo = data.get('codigo', '').strip().upper()
+    canal = data.get('canal', 'whatsapp')
+    pediu_pagamento = data.get('pediu_pagamento', False)
+
+    if not codigo:
+        return jsonify({'erro': 'Informe o código do processo para verificar.'}), 400
+
+    processo = Processo.query.filter_by(codigo_unico=codigo).first()
+
+    resultado = 'nao_encontrado'
+    mensagem = 'Código de processo não encontrado. Atenção: confirme o código diretamente com o escritório, pode ser tentativa de golpe.'
+    alerta_nivel = 'alto'
+
+    if processo:
+        numero_oficial = ''.join(filter(str.isdigit, processo.advogado.telefone_oficial)) if processo.advogado else ''
+        if numero == numero_oficial:
+            resultado = 'confirmado'
+            mensagem = f'Confirmado! Este é o número oficial de {processo.advogado.nome} ({processo.escritorio.nome}).'
+            alerta_nivel = 'nenhum'
+        else:
+            resultado = 'numero_diferente'
+            mensagem = f'Atenção: o código do processo é válido, mas esse número NÃO é o oficial de {processo.advogado.nome}. Pode ser golpe.'
+            alerta_nivel = 'alto'
+
+    if pediu_pagamento:
+        mensagem += ' ⚠️ Advogados não pedem pagamento via Pix/transferência para liberar valores de processo. Isso é sinal forte de golpe.'
+        alerta_nivel = 'alto'
+
+    if processo and resultado != 'confirmado':
+        tentativa = TentativaContato(
+            processo_id=processo.id,
+            numero_suspeito=numero,
+            canal=canal,
+            descricao=data.get('descricao', ''),
+            confirmado_golpe=(resultado == 'numero_diferente')
+        )
+        db.session.add(tentativa)
+        db.session.commit()
+
+    return jsonify({
+        'resultado': resultado,
+        'mensagem': mensagem,
+        'alerta_nivel': alerta_nivel
+    })
+
+
+# ──────────────────────────────────────────────
+# WEBHOOK HOTMART
+# ──────────────────────────────────────────────
+
+@app.route('/webhook/hotmart', methods=['POST'])
+def webhook_hotmart():
+    data = request.get_json() or {}
+
+    token_recebido = request.headers.get('X-Hotmart-Hottok', '')
+    if HOTMART_WEBHOOK_TOKEN and token_recebido != HOTMART_WEBHOOK_TOKEN:
+        return jsonify({'erro': 'Token inválido'}), 403
+
+    evento = data.get('event', '')
+    email_comprador = data.get('data', {}).get('buyer', {}).get('email', '').strip().lower()
+
+    if not email_comprador:
+        return jsonify({'erro': 'Email não encontrado no payload'}), 400
+
+    escritorio = Escritorio.query.filter_by(email=email_comprador).first()
+    if not escritorio:
+        return jsonify({'erro': 'Escritório não encontrado para este email'}), 404
+
+    if evento in ('PURCHASE_COMPLETE', 'PURCHASE_APPROVED'):
+        escritorio.plano = 'pro'
+        escritorio.plano_expira = datetime.utcnow() + timedelta(days=32)
+    elif evento in ('PURCHASE_REFUNDED', 'PURCHASE_CANCELED', 'PURCHASE_CHARGEBACK', 'SUBSCRIPTION_CANCELLATION'):
+        escritorio.plano = 'cancelado'
+        escritorio.plano_expira = None
+
+    db.session.commit()
+    return jsonify({'ok': True})
+
+
+# ──────────────────────────────────────────────
+# ADMIN
+# ──────────────────────────────────────────────
+
+@app.route('/api/admin/ativar-pro/<secret>/<email>')
+def admin_ativar_pro(secret, email):
+    if secret != ADMIN_SECRET:
+        return 'Não autorizado', 403
+    escritorio = Escritorio.query.filter_by(email=email.strip().lower()).first()
+    if not escritorio:
+        return f'Escritório {email} não encontrado', 404
+    escritorio.plano = 'pro'
+    escritorio.plano_expira = datetime.utcnow() + timedelta(days=365)
+    db.session.commit()
+    return f'PRO ativado para {email}!'
+
+
+@app.route('/api/admin/listar-escritorios/<secret>')
+def admin_listar(secret):
+    if secret != ADMIN_SECRET:
+        return 'Não autorizado', 403
+    lista = Escritorio.query.order_by(Escritorio.criado_em.desc()).all()
+    linhas = ''.join(
+        f"<tr><td>{e.id}</td><td>{e.nome}</td><td>{e.email}</td>"
+        f"<td>{e.plano}</td><td>{len(e.processos)}</td></tr>"
+        for e in lista
+    )
+    return f"""
+    <html><body style="font-family:Arial;padding:20px">
+    <h2>AdvogoSeguro — Escritórios cadastrados</h2>
+    <table border=1 cellpadding=8 style="border-collapse:collapse">
+    <tr><th>ID</th><th>Nome</th><th>Email</th><th>Plano</th><th>Processos</th></tr>
+    {linhas}
+    </table>
+    </body></html>
+    """
+
+
+# ──────────────────────────────────────────────
+# HEALTHCHECK
+# ──────────────────────────────────────────────
+
+# ──────────────────────────────────────────────
+# PÁGINAS — FRONTEND (HTML)
+# ──────────────────────────────────────────────
+
+@app.route('/')
+def home():
+    return render_template('index.html')
+
+
+@app.route('/verificar')
+def pagina_verificar_publico():
+    return render_template('verificar_publico.html')
+
+
+@app.route('/escritorio/login')
+def pagina_escritorio_login():
+    return render_template('escritorio_login.html')
+
+
+@app.route('/escritorio/cadastro')
+def pagina_escritorio_cadastro():
+    return render_template('escritorio_cadastro.html')
+
+
+@app.route('/escritorio/painel')
+def pagina_escritorio_painel():
+    return render_template('painel.html', active='dashboard')
+
+
+@app.route('/escritorio/advogados')
+def pagina_escritorio_advogados():
+    return render_template('advogados.html', active='advogados')
+
+
+@app.route('/escritorio/processos')
+def pagina_escritorio_processos():
+    return render_template('processos.html', active='processos')
+
+
+@app.route('/escritorio/tentativas')
+def pagina_escritorio_tentativas():
+    return render_template('tentativas.html', active='tentativas')
+
+
+@app.route('/escritorio/contato-seguro')
+def pagina_escritorio_contato_seguro():
+    return render_template('contato_seguro.html', active='contato_seguro')
+
+
+@app.route('/escritorio/configuracoes')
+def pagina_escritorio_configuracoes():
+    return render_template('configuracoes.html', active='configuracoes')
+
+
+@app.route('/redefinir-senha')
+def pagina_redefinir_senha():
+    return render_template('redefinir_senha.html')
+
+
+@app.route('/cliente/login')
+def pagina_cliente_login():
+    return render_template('cliente_login.html')
+
+
+@app.route('/cliente/area')
+def pagina_cliente_area():
+    return render_template('cliente_area.html')
+
+
+@app.route('/api/health')
+def health():
+    return jsonify({'status': 'ok', 'timestamp': datetime.utcnow().isoformat()})
+
+
+@app.route('/api/status')
+def api_status():
+    return jsonify({
+        'app': 'AdvogoSeguro API',
+        'status': 'online',
+        'spynet': 'Tecnologia Forense & Soluções Digitais'
+    })
+
+
+# ──────────────────────────────────────────────
+# INICIALIZAÇÃO
+# ──────────────────────────────────────────────
+
+with app.app_context():
+    db.create_all()
+    print('[MIGRACAO] OK!')
+
+if __name__ == '__main__':
+    app.run(debug=True, port=5000)

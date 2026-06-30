@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Processos — ADVOGO SEGURO</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+<div class="mobile-topbar">
+  <button onclick="toggleSidebar()">☰</button>
+  <div class="brand" style="font-size:1rem;">🛡️ ADVOGO SEGURO</div>
+  <div></div>
+</div>
+
+<div class="app-shell">
+  {% include '_sidebar.html' with context %}
+
+  <main class="main-content">
+    <div class="topbar">
+      <h1>Processos</h1>
+      <button class="btn-spy btn-spy-primary" onclick="abrirModalNovo()">+ Novo Processo</button>
+    </div>
+
+    <div id="alertaProcessos" class="alert-box"></div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>Processos cadastrados</h2></div>
+      <div class="table-wrap">
+        <table class="spy-table" id="tabelaProcessos">
+          <thead>
+            <tr><th>Código</th><th>Nº Processo</th><th>Cliente</th><th>Advogado</th><th>Status</th><th>Criado em</th><th>Ações</th></tr>
+          </thead>
+          <tbody id="corpoTabelaProcessos">
+            <tr><td colspan="7" class="empty-state">Carregando...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- Modal cadastro -->
+<div class="modal-overlay" id="modalProcesso">
+  <div class="modal-box">
+    <h3>Cadastrar processo</h3>
+    <div id="alertaModal" class="alert-box"></div>
+
+    <form id="formProcesso">
+      <div class="form-group">
+        <label>Advogado responsável</label>
+        <select class="form-control" id="procAdvogado" required>
+          <option value="">Selecione...</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Nome do cliente</label>
+        <input type="text" class="form-control" id="procClienteNome" required placeholder="Nome completo do cliente">
+      </div>
+      <div class="form-group">
+        <label>Telefone do cliente</label>
+        <input type="text" class="form-control" id="procClienteTelefone" required placeholder="(61) 99999-9999">
+        <div class="helper-text">Esse será o login do cliente na área dele.</div>
+      </div>
+      <div class="form-group">
+        <label>E-mail do cliente</label>
+        <input type="email" class="form-control" id="procClienteEmail" placeholder="cliente@email.com">
+      </div>
+      <div class="form-group">
+        <label>Número do processo</label>
+        <input type="text" class="form-control" id="procNumero" placeholder="0000000-00.0000.0.00.0000">
+      </div>
+      <div class="form-group">
+        <label>Descrição</label>
+        <textarea class="form-control" id="procDescricao" placeholder="Breve descrição do caso..."></textarea>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn-spy btn-spy-ghost btn-spy-block" onclick="fecharModalNovo()">Cancelar</button>
+        <button type="submit" class="btn-spy btn-spy-primary btn-spy-block" id="btnSalvarProcesso">Criar processo</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Modal edição -->
+<div class="modal-overlay" id="modalEditarProcesso">
+  <div class="modal-box">
+    <h3>Editar processo</h3>
+    <div id="alertaEditar" class="alert-box"></div>
+    <form id="formEditarProcesso">
+      <input type="hidden" id="editProcId">
+      <div class="form-group">
+        <label>Advogado responsável</label>
+        <select class="form-control" id="editAdvogado" required>
+          <option value="">Selecione...</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Número do processo</label>
+        <input type="text" class="form-control" id="editNumero" placeholder="0000000-00.0000.0.00.0000">
+      </div>
+      <div class="form-group">
+        <label>Descrição</label>
+        <textarea class="form-control" id="editDescricao"></textarea>
+      </div>
+      <div class="form-group">
+        <label>Status</label>
+        <select class="form-control" id="editStatus">
+          <option value="ativo">Ativo</option>
+          <option value="arquivado">Arquivado</option>
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn-spy btn-spy-ghost btn-spy-block" onclick="document.getElementById('modalEditarProcesso').classList.remove('show')">Cancelar</button>
+        <button type="submit" class="btn-spy btn-spy-primary btn-spy-block" id="btnSalvarEdicao">Salvar alterações</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Modal exclusão -->
+<div class="modal-overlay" id="modalExcluirProcesso">
+  <div class="modal-box">
+    <h3>Excluir processo?</h3>
+    <p style="color:var(--texto-suave);">Esta ação não pode ser desfeita e removerá também as tentativas suspeitas registradas neste processo.</p>
+    <div id="alertaExcluirProcesso" class="alert-box"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn-spy btn-spy-ghost btn-spy-block" onclick="document.getElementById('modalExcluirProcesso').classList.remove('show')">Cancelar</button>
+      <button type="button" class="btn-spy btn-spy-danger btn-spy-block" id="btnConfirmarExcluirProcesso">Excluir</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal reenviar acesso -->
+<div class="modal-overlay" id="modalReenviarAcesso">
+  <div class="modal-box">
+    <h3>📲 Reenviar acesso ao cliente</h3>
+    <p style="color:var(--texto-suave); font-size:0.9rem;">Copie o link abaixo e envie manualmente para o cliente pelo WhatsApp. O link expira em 30 minutos.</p>
+    <div id="alertaReenviar" class="alert-box"></div>
+    <div class="form-group">
+      <input type="text" class="form-control" id="linkReenviar" readonly>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn-spy btn-spy-ghost btn-spy-block" onclick="document.getElementById('modalReenviarAcesso').classList.remove('show')">Fechar</button>
+      <button type="button" class="btn-spy btn-spy-primary btn-spy-block" onclick="copiarLinkReenvio()">Copiar link</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal link sem login (Contato Seguro) -->
+<div class="modal-overlay" id="modalLinkSemLogin">
+  <div class="modal-box">
+    <h3>🔗 Link sem login (Contato Seguro)</h3>
+    <p style="color:var(--texto-suave); font-size:0.9rem;">
+      Esse link nunca expira e não exige telefone/senha — o cliente abre direto e usa o "Contato Seguro ADVOGO".
+      Pode enviar uma vez só, pelo WhatsApp ou e-mail do cliente.
+    </p>
+    <div class="form-group">
+      <input type="text" class="form-control" id="linkSemLogin" readonly>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn-spy btn-spy-ghost btn-spy-block" onclick="document.getElementById('modalLinkSemLogin').classList.remove('show')">Fechar</button>
+      <button type="button" class="btn-spy btn-spy-primary btn-spy-block" onclick="copiarLinkSemLogin()">Copiar link</button>
+    </div>
+    <button type="button" class="btn-spy btn-spy-success btn-spy-block" style="margin-top:10px;" onclick="enviarLinkWhatsapp()">💬 Enviar pelo WhatsApp</button>
+  </div>
+</div>
+
+<!-- Modal resultado com código em destaque -->
+<div class="modal-overlay" id="modalResultado">
+  <div class="modal-box">
+    <h3>✅ Processo criado com sucesso!</h3>
+    <p style="color:var(--texto-suave); font-size:0.9rem;">
+      Compartilhe este código com o cliente. Ele usará esse código junto com o telefone e a senha temporária para acessar a área de verificação.
+    </p>
+    <div class="codigo-destaque">
+      <div class="label">Código único do processo</div>
+      <div class="codigo" id="codigoGerado">—</div>
+      <div class="senha-cliente" id="senhaClienteWrap" style="display:none;">
+        Senha temporária do cliente: <b id="senhaClienteGerada">—</b>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-spy btn-spy-primary btn-spy-block" onclick="fecharModalResultado()">Concluir</button>
+    </div>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/api.js') }}"></script>
+<script>
+Auth.requireTipo('escritorio', '/escritorio/login');
+
+let listaAdvogadosCache = [];
+
+function abrirModalNovo() { document.getElementById('modalProcesso').classList.add('show'); }
+function fecharModalNovo() {
+  document.getElementById('modalProcesso').classList.remove('show');
+  document.getElementById('formProcesso').reset();
+  hideAlert('alertaModal');
+}
+function fecharModalResultado() {
+  document.getElementById('modalResultado').classList.remove('show');
+  carregarProcessos();
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str || '';
+  return div.innerHTML;
+}
+
+async function carregarAdvogadosSelect() {
+  const select = document.getElementById('procAdvogado');
+  const selectEdit = document.getElementById('editAdvogado');
+  try {
+    listaAdvogadosCache = await apiRequest('/api/escritorio/advogados');
+    const opcoes = listaAdvogadosCache.length === 0
+      ? '<option value="">Cadastre um advogado primeiro</option>'
+      : '<option value="">Selecione...</option>' + listaAdvogadosCache.map(a => `<option value="${a.id}">${escapeHtml(a.nome)} ${a.oab ? '— ' + escapeHtml(a.oab) : ''}</option>`).join('');
+    select.innerHTML = opcoes;
+    if (selectEdit) selectEdit.innerHTML = opcoes;
+  } catch (err) {
+    showAlert('alertaProcessos', err.message, 'erro');
+  }
+}
+
+function badgeStatus(status) {
+  if (status === 'ativo') return '<span class="badge-pill badge-verde">Ativo</span>';
+  return '<span class="badge-pill badge-cinza">Arquivado</span>';
+}
+
+let listaProcessosCache = [];
+
+async function carregarProcessos() {
+  const corpo = document.getElementById('corpoTabelaProcessos');
+  try {
+    const lista = await apiRequest('/api/escritorio/processos');
+    listaProcessosCache = lista;
+    if (lista.length === 0) {
+      corpo.innerHTML = '<tr><td colspan="7"><div class="empty-state"><div class="ic">📁</div>Nenhum processo cadastrado ainda.</div></td></tr>';
+      return;
+    }
+    corpo.innerHTML = lista.map(p => `
+      <tr>
+        <td><code style="font-weight:700;">${escapeHtml(p.codigo_unico)}</code></td>
+        <td>${p.numero_processo ? escapeHtml(p.numero_processo) : '—'}</td>
+        <td>${escapeHtml(p.cliente_nome)}</td>
+        <td>${p.advogado_nome ? escapeHtml(p.advogado_nome) : '—'}</td>
+        <td>${badgeStatus(p.status)}</td>
+        <td>${escapeHtml(p.criado_em)}</td>
+        <td style="white-space:nowrap;">
+          <button class="btn-spy btn-spy-ghost" style="padding:6px 10px; font-size:0.8rem;" onclick="abrirModalEditarProcesso(${p.id})">✏️</button>
+          <button class="btn-spy btn-spy-ghost" style="padding:6px 10px; font-size:0.8rem;" onclick="abrirReenviarAcesso(${p.cliente_id})" title="Reenviar acesso ao cliente">📲</button>
+          <button class="btn-spy btn-spy-ghost" style="padding:6px 10px; font-size:0.8rem;" onclick="abrirLinkSemLogin('${p.link_cliente_seguro}', '${p.cliente_telefone || ''}')" title="Link sem login (Contato Seguro)">🔗</button>
+          <button class="btn-spy btn-spy-ghost" style="padding:6px 10px; font-size:0.8rem; color:var(--vermelho);" onclick="abrirModalExcluirProcesso(${p.id})">🗑️</button>
+        </td>
+      </tr>
+    `).join('');
+  } catch (err) {
+    if (err.payload && err.payload.limite) {
+      corpo.innerHTML = '<tr><td colspan="7"><div class="empty-state"><div class="ic">🔒</div>' + escapeHtml(err.message) + '</div></td></tr>';
+    } else {
+      showAlert('alertaProcessos', err.message, 'erro');
+    }
+  }
+}
+
+function abrirModalEditarProcesso(id) {
+  const p = listaProcessosCache.find(x => x.id === id);
+  if (!p) return;
+  hideAlert('alertaEditar');
+  document.getElementById('editProcId').value = p.id;
+  document.getElementById('editAdvogado').value = p.advogado_id || '';
+  document.getElementById('editNumero').value = p.numero_processo || '';
+  document.getElementById('editDescricao').value = p.descricao || '';
+  document.getElementById('editStatus').value = p.status || 'ativo';
+  document.getElementById('modalEditarProcesso').classList.add('show');
+}
+
+document.getElementById('formEditarProcesso').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  hideAlert('alertaEditar');
+  const btn = document.getElementById('btnSalvarEdicao');
+  setLoading(btn, true, 'Salvar alterações', 'Salvando...');
+  try {
+    const id = document.getElementById('editProcId').value;
+    await apiRequest('/api/escritorio/processos/' + id, {
+      method: 'PUT',
+      body: {
+        advogado_id: parseInt(document.getElementById('editAdvogado').value, 10) || null,
+        numero_processo: document.getElementById('editNumero').value.trim(),
+        descricao: document.getElementById('editDescricao').value.trim(),
+        status: document.getElementById('editStatus').value
+      }
+    });
+    document.getElementById('modalEditarProcesso').classList.remove('show');
+    carregarProcessos();
+  } catch (err) {
+    showAlert('alertaEditar', err.message, 'erro');
+  } finally {
+    setLoading(btn, false, 'Salvar alterações');
+  }
+});
+
+let processoExcluindoId = null;
+function abrirModalExcluirProcesso(id) {
+  processoExcluindoId = id;
+  hideAlert('alertaExcluirProcesso');
+  document.getElementById('modalExcluirProcesso').classList.add('show');
+}
+
+document.getElementById('btnConfirmarExcluirProcesso').addEventListener('click', async () => {
+  hideAlert('alertaExcluirProcesso');
+  const btn = document.getElementById('btnConfirmarExcluirProcesso');
+  setLoading(btn, true, 'Excluir', 'Excluindo...');
+  try {
+    await apiRequest('/api/escritorio/processos/' + processoExcluindoId, { method: 'DELETE' });
+    document.getElementById('modalExcluirProcesso').classList.remove('show');
+    carregarProcessos();
+  } catch (err) {
+    showAlert('alertaExcluirProcesso', err.message, 'erro');
+  } finally {
+    setLoading(btn, false, 'Excluir');
+  }
+});
+
+async function abrirReenviarAcesso(clienteId) {
+  hideAlert('alertaReenviar');
+  document.getElementById('linkReenviar').value = 'Gerando link...';
+  document.getElementById('modalReenviarAcesso').classList.add('show');
+  try {
+    const data = await apiRequest('/api/escritorio/cliente/' + clienteId + '/link-reset');
+    document.getElementById('linkReenviar').value = window.location.origin + data.link;
+  } catch (err) {
+    showAlert('alertaReenviar', err.message, 'erro');
+  }
+}
+
+function copiarLinkReenvio() {
+  const campo = document.getElementById('linkReenviar');
+  campo.select();
+  document.execCommand('copy');
+}
+
+let telefoneClienteAtualLink = '';
+
+function abrirLinkSemLogin(link, telefoneCliente) {
+  document.getElementById('linkSemLogin').value = window.location.origin + link;
+  telefoneClienteAtualLink = telefoneCliente || '';
+  document.getElementById('modalLinkSemLogin').classList.add('show');
+}
+
+function copiarLinkSemLogin() {
+  const campo = document.getElementById('linkSemLogin');
+  campo.select();
+  document.execCommand('copy');
+}
+
+function enviarLinkWhatsapp() {
+  const link = document.getElementById('linkSemLogin').value;
+  const mensagem = `Olá, este é seu link oficial do ADVOGO SEGURO para confirmar contatos do nosso escritório. ` +
+    `Sempre que alguém falar em nome do advogado, acesse este link antes de enviar qualquer informação ou pagamento: ${link}`;
+  const numero = telefoneClienteAtualLink.replace(/\D/g, '');
+  const numeroComPais = numero ? (numero.startsWith('55') ? numero : '55' + numero) : '';
+  const url = numeroComPais
+    ? `https://wa.me/${numeroComPais}?text=${encodeURIComponent(mensagem)}`
+    : `https://wa.me/?text=${encodeURIComponent(mensagem)}`;
+  window.open(url, '_blank');
+}
+
+document.getElementById('formProcesso').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  hideAlert('alertaModal');
+  const btn = document.getElementById('btnSalvarProcesso');
+  setLoading(btn, true, 'Criar processo', 'Criando...');
+
+  try {
+    const data = await apiRequest('/api/escritorio/processos', {
+      method: 'POST',
+      body: {
+        advogado_id: parseInt(document.getElementById('procAdvogado').value, 10),
+        cliente_nome: document.getElementById('procClienteNome').value.trim(),
+        cliente_telefone: document.getElementById('procClienteTelefone').value.trim(),
+        cliente_email: document.getElementById('procClienteEmail').value.trim(),
+        numero_processo: document.getElementById('procNumero').value.trim(),
+        descricao: document.getElementById('procDescricao').value.trim()
+      }
+    });
+
+    fecharModalNovo();
+    document.getElementById('codigoGerado').textContent = data.codigo_unico;
+    if (data.senha_temporaria) {
+      document.getElementById('senhaClienteWrap').style.display = 'block';
+      document.getElementById('senhaClienteGerada').textContent = data.senha_temporaria;
+    } else {
+      document.getElementById('senhaClienteWrap').style.display = 'none';
+    }
+    document.getElementById('modalResultado').classList.add('show');
+  } catch (err) {
+    showAlert('alertaModal', err.message, 'erro');
+  } finally {
+    setLoading(btn, false, 'Criar processo');
+  }
+});
+
+carregarAdvogadosSelect();
+carregarProcessos();
+</script>
+</body>
+</html>

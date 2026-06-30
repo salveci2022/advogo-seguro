@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tentativas Suspeitas — ADVOGO SEGURO</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+<div class="mobile-topbar">
+  <button onclick="toggleSidebar()">☰</button>
+  <div class="brand" style="font-size:1rem;">🛡️ ADVOGO SEGURO</div>
+  <div></div>
+</div>
+
+<div class="app-shell">
+  {% include '_sidebar.html' with context %}
+
+  <main class="main-content">
+    <div class="topbar">
+      <h1>Tentativas Suspeitas</h1>
+    </div>
+
+    <div id="alertaTentativas" class="alert-box"></div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Registros de possíveis golpes</h2>
+        <span class="helper-text">Registrados automaticamente quando um cliente verifica um contato divergente do número oficial.</span>
+      </div>
+      <div class="table-wrap">
+        <table class="spy-table" id="tabelaTentativas">
+          <thead>
+            <tr><th>Data</th><th>Número suspeito</th><th>Canal</th><th>Cliente</th><th>Processo</th><th>Descrição</th><th>Golpe confirmado</th><th>PDF</th></tr>
+          </thead>
+          <tbody id="corpoTabelaTentativas">
+            <tr><td colspan="8" class="empty-state">Carregando...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="{{ url_for('static', filename='js/api.js') }}"></script>
+<script>
+Auth.requireTipo('escritorio', '/escritorio/login');
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str || '';
+  return div.innerHTML;
+}
+
+function canalLabel(c) {
+  const m = { whatsapp: '💬 WhatsApp', ligacao: '📞 Ligação', videochamada: '🎥 Videochamada', email: '✉️ E-mail' };
+  return m[c] || (c || '—');
+}
+
+async function carregarTentativas() {
+  const corpo = document.getElementById('corpoTabelaTentativas');
+  try {
+    const lista = await apiRequest('/api/escritorio/tentativas');
+    if (lista.length === 0) {
+      corpo.innerHTML = '<tr><td colspan="8"><div class="empty-state"><div class="ic">🚨</div>Nenhuma tentativa suspeita registrada até agora. Ótimo sinal!</div></td></tr>';
+      return;
+    }
+    corpo.innerHTML = lista.map(t => `
+      <tr>
+        <td>${escapeHtml(t.criado_em)}</td>
+        <td><strong>${escapeHtml(t.numero_suspeito || '—')}</strong></td>
+        <td>${canalLabel(t.canal)}</td>
+        <td>${escapeHtml(t.cliente_nome)}</td>
+        <td><code>${escapeHtml(t.processo_codigo)}</code></td>
+        <td style="max-width:260px;">${escapeHtml(t.descricao || '—')}</td>
+        <td>${t.confirmado_golpe ? '<span class="badge-pill badge-vermelho">⚠ Sim</span>' : '<span class="badge-pill badge-amarelo">Em análise</span>'}</td>
+        <td><button class="btn-spy btn-spy-ghost" style="padding:6px 10px; font-size:0.78rem;" onclick="gerarPdfTentativa(${t.id})">📄</button></td>
+      </tr>
+    `).join('');
+  } catch (err) {
+    showAlert('alertaTentativas', err.message, 'erro');
+  }
+}
+
+async function gerarPdfTentativa(id) {
+  try {
+    const resp = await fetch('/api/escritorio/relatorio/tentativa/' + id + '/pdf', {
+      headers: { 'Authorization': 'Bearer ' + Auth.getToken() }
+    });
+    if (!resp.ok) throw new Error('Não foi possível gerar o PDF.');
+    const blob = await resp.blob();
+    window.open(URL.createObjectURL(blob), '_blank');
+  } catch (err) {
+    showAlert('alertaTentativas', err.message, 'erro');
+  }
+}
+
+carregarTentativas();
+</script>
+</body>
+</html>

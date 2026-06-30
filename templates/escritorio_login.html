@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Login do Escritório — ADVOGO SEGURO</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+<div class="auth-wrap">
+  <div class="auth-side">
+    <div class="brand" style="display:flex;align-items:center;gap:10px;font-weight:800;font-size:1.3rem;margin-bottom:30px;">
+      <span style="color:var(--dourado);font-size:1.6rem;">🛡️</span> ADVOGO SEGURO
+    </div>
+    <h2>Painel do Escritório</h2>
+    <p>Gerencie advogados, processos e acompanhe tentativas de golpe contra seus clientes em um só lugar.</p>
+    <div class="trust-item"><span class="ic">✔</span><span>Cada processo gera um código único de verificação</span></div>
+    <div class="trust-item"><span class="ic">✔</span><span>Clientes confirmam contatos em segundos</span></div>
+    <div class="trust-item"><span class="ic">✔</span><span>Histórico completo de tentativas suspeitas</span></div>
+  </div>
+
+  <div class="auth-form-col">
+    <div class="auth-card">
+      <div class="brand" style="font-weight:800; font-size:1.1rem; display:flex; gap:8px; align-items:center;">🛡️ ADVOGO SEGURO</div>
+      <div class="sub">Acesse o painel do seu escritório</div>
+
+      <div id="alertaLogin" class="alert-box"></div>
+
+      <form id="formLogin">
+        <div class="form-group">
+          <label>E-mail</label>
+          <input type="email" class="form-control" id="email" required placeholder="seuescritorio@email.com">
+        </div>
+        <div class="form-group">
+          <label>Senha</label>
+          <input type="password" class="form-control" id="senha" required placeholder="••••••••">
+          <div style="text-align:right; margin-top:6px;">
+            <a href="#" onclick="abrirModalEsqueci(); return false;" style="font-size:0.82rem; color:var(--azul-medio); font-weight:600;">Esqueci minha senha</a>
+          </div>
+        </div>
+        <button type="submit" class="btn-spy btn-spy-primary btn-spy-block" id="btnEntrar">Entrar</button>
+      </form>
+
+      <div class="auth-foot">
+        Ainda não tem cadastro? <a href="/escritorio/cadastro">Cadastre seu escritório</a><br>
+        <a href="/" style="color:var(--texto-suave); font-weight:500;">← Voltar para o início</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal esqueci senha -->
+<div class="modal-overlay" id="modalEsqueci">
+  <div class="modal-box">
+    <h3>Recuperar acesso</h3>
+    <p style="color:var(--texto-suave); font-size:0.9rem;">Informe o e-mail cadastrado do escritório. Se existir, enviaremos as instruções de redefinição.</p>
+    <div id="alertaEsqueci" class="alert-box"></div>
+    <form id="formEsqueci">
+      <div class="form-group">
+        <label>E-mail</label>
+        <input type="email" class="form-control" id="emailEsqueci" required placeholder="seuescritorio@email.com">
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn-spy btn-spy-ghost btn-spy-block" onclick="fecharModalEsqueci()">Cancelar</button>
+        <button type="submit" class="btn-spy btn-spy-primary btn-spy-block" id="btnEnviarEsqueci">Enviar</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/api.js') }}"></script>
+<script>
+document.getElementById('formLogin').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  hideAlert('alertaLogin');
+  const btn = document.getElementById('btnEntrar');
+  setLoading(btn, true, 'Entrar', 'Entrando...');
+
+  try {
+    const data = await apiRequest('/api/escritorio/login', {
+      method: 'POST',
+      auth: false,
+      body: {
+        email: document.getElementById('email').value.trim(),
+        senha: document.getElementById('senha').value
+      }
+    });
+    Auth.setSession(data.token, 'escritorio', data.nome, data.plano);
+    window.location.href = '/escritorio/painel';
+  } catch (err) {
+    showAlert('alertaLogin', err.message, 'erro');
+  } finally {
+    setLoading(btn, false, 'Entrar');
+  }
+});
+
+function abrirModalEsqueci() { document.getElementById('modalEsqueci').classList.add('show'); }
+function fecharModalEsqueci() {
+  document.getElementById('modalEsqueci').classList.remove('show');
+  document.getElementById('formEsqueci').reset();
+  hideAlert('alertaEsqueci');
+}
+
+document.getElementById('formEsqueci').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  hideAlert('alertaEsqueci');
+  const btn = document.getElementById('btnEnviarEsqueci');
+  setLoading(btn, true, 'Enviar', 'Enviando...');
+  try {
+    const data = await apiRequest('/api/escritorio/esqueci-senha', {
+      method: 'POST',
+      auth: false,
+      body: { email: document.getElementById('emailEsqueci').value.trim() }
+    });
+    let msg = data.mensagem;
+    if (data.link_dev) {
+      msg += ' (Modo dev — sem envio de e-mail configurado ainda. Link: ' + window.location.origin + data.link_dev + ')';
+    }
+    showAlert('alertaEsqueci', msg, 'sucesso');
+  } catch (err) {
+    showAlert('alertaEsqueci', err.message, 'erro');
+  } finally {
+    setLoading(btn, false, 'Enviar');
+  }
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+<div class="sidebar" id="sidebarEl">
+  <div class="brand">🛡️ ADVOGO SEGURO</div>
+  <div class="plano-tag" id="planoTag">PLANO: —</div>
+  <nav>
+    <a href="/escritorio/painel" data-path="/escritorio/painel" class="{{ 'active' if active == 'dashboard' else '' }}"><span class="ic">📊</span> Dashboard</a>
+    <a href="/escritorio/advogados" data-path="/escritorio/advogados" class="{{ 'active' if active == 'advogados' else '' }}"><span class="ic">⚖️</span> Advogados</a>
+    <a href="/escritorio/processos" data-path="/escritorio/processos" class="{{ 'active' if active == 'processos' else '' }}"><span class="ic">📁</span> Processos</a>
+    <a href="/escritorio/tentativas" data-path="/escritorio/tentativas" class="{{ 'active' if active == 'tentativas' else '' }}"><span class="ic">🚨</span> Tentativas Suspeitas</a>
+    <a href="/escritorio/contato-seguro" data-path="/escritorio/contato-seguro" class="{{ 'active' if active == 'contato_seguro' else '' }}"><span class="ic">🔐</span> Contato Seguro</a>
+    <a href="/escritorio/relatorios" data-path="/escritorio/relatorios" class="{{ 'active' if active == 'relatorios' else '' }}"><span class="ic">📄</span> Relatórios</a>
+    <a href="/escritorio/configuracoes" data-path="/escritorio/configuracoes" class="{{ 'active' if active == 'configuracoes' else '' }}"><span class="ic">⚙️</span> Configurações</a>
+  </nav>
+  <div class="logout-link">
+    <a href="#" onclick="Auth.logout(); return false;"><span class="ic">🚪</span> Sair</a>
+  </div>
+</div>

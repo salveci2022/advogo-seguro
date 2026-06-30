@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ADVOGO SEGURO — Verificação de contato</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/cliente-seguro.css') }}">
+</head>
+<body>
+
+<div class="cs-topo">
+  <div class="cs-marca">ADVOGO SEGURO</div>
+  <div class="cs-subtitulo">VERIFICAÇÃO DE CONTATO DO SEU ADVOGADO</div>
+</div>
+
+<div class="cs-container">
+
+  <div id="carregando" class="cs-carregando">Carregando...</div>
+
+  <div id="invalidoBox" class="cs-invalido" style="display:none;">
+    <div style="font-size:2rem; margin-bottom:8px;">🚫</div>
+    <div style="font-weight:800; margin-bottom:4px;">Link inválido</div>
+    <div style="font-size:0.9rem;">Esse link não existe ou expirou. Peça ao seu escritório para gerar um novo.</div>
+  </div>
+
+  <div id="conteudo" style="display:none;">
+
+    <div class="cs-card-advogado">
+      <img id="fotoAdvogado" class="cs-avatar" style="display:none;" alt="Foto do advogado">
+      <div id="iniciaisAdvogado" class="cs-avatar-iniciais" style="display:none;">--</div>
+      <div class="cs-nome-advogado" id="nomeAdvogado">—</div>
+      <div class="cs-meta-advogado" id="metaAdvogado">—</div>
+    </div>
+
+    <div class="cs-card-pergunta">
+      <div class="cs-titulo">Alguém entrou em contato dizendo ser seu advogado?</div>
+      <div class="cs-texto">Toque no botão abaixo para verificar agora, sem precisar falar nada com quem ligou.</div>
+
+      <button class="btn-rounded btn-acao-azul" id="btnVerificar" onclick="verificar()">
+        <span class="ic">🔍</span> Verificar contato agora
+      </button>
+
+      <div class="card-alerta" id="cardResultado">
+        <div class="cs-emoji" id="resultadoEmoji">•</div>
+        <div class="cs-resultado-texto" id="resultadoTexto">—</div>
+        <div class="cs-detalhe" id="resultadoDetalhe"></div>
+      </div>
+    </div>
+
+    <div class="cs-card">
+      <div class="cs-titulo-card">Algo errado? Toque em uma opção</div>
+      <button class="btn-rounded btn-alerta-vermelho" onclick="registrarAlerta('pix')">
+        <span class="ic">🚨</span> Pediram dinheiro/Pix
+      </button>
+      <button class="btn-rounded btn-alerta-amarelo" onclick="registrarAlerta('nao_reconheco')">
+        <span class="ic">❓</span> Não reconheço esse contato
+      </button>
+      <button class="btn-rounded btn-acao-azul" onclick="falarComEscritorio()">
+        <span class="ic">💬</span> Falar com o escritório
+      </button>
+    </div>
+
+    <div class="cs-card">
+      <div class="cs-titulo-card">Cole aqui a mensagem suspeita</div>
+      <textarea class="cs-textarea" id="textoSuspeito" placeholder="Cole ou digite o que a pessoa te mandou..."></textarea>
+      <button class="btn-rounded btn-cinza" onclick="analisarMensagem()">
+        <span class="ic">🧠</span> Analisar com IA Anti-Golpe
+      </button>
+      <div class="cs-resultado-ia" id="resultadoIA"></div>
+    </div>
+
+    <div id="alertaGeral" class="cs-alert-box"></div>
+
+    <div class="cs-aviso-seguranca">
+      ⚠️ Nunca dê dinheiro, senha ou documentos para quem te ligou — mesmo se aparecer confirmado aqui.
+    </div>
+
+    <div class="cs-rodape">
+      ADVOGO SEGURO — SPYNET Tecnologia Forense &amp; Soluções Digitais Ltda.
+    </div>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/api.js') }}"></script>
+<script>
+const TOKEN = {{ token | tojson }};
+let dadosAtuais = null;
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str || '';
+  return div.innerHTML;
+}
+
+/* Alertas locais (independentes do CSS do painel do escritório) */
+function csShowAlert(msg, tipo) {
+  const el = document.getElementById('alertaGeral');
+  el.textContent = msg;
+  el.className = 'cs-alert-box show ' + (tipo || 'erro');
+}
+function csHideAlert() {
+  document.getElementById('alertaGeral').className = 'cs-alert-box';
+}
+
+async function carregar() {
+  try {
+    const resp = await fetch('/api/cliente-publico/seguro/' + encodeURIComponent(TOKEN));
+    const data = await resp.json();
+    document.getElementById('carregando').style.display = 'none';
+
+    if (!resp.ok || !data.valido) {
+      document.getElementById('invalidoBox').style.display = 'block';
+      return;
+    }
+    dadosAtuais = data;
+    document.getElementById('conteudo').style.display = 'block';
+
+    document.getElementById('nomeAdvogado').textContent = data.advogado_nome || 'Advogado não definido';
+    document.getElementById('metaAdvogado').textContent =
+      (data.advogado_oab ? 'OAB ' + data.advogado_oab + ' — ' : '') + (data.escritorio_nome || '');
+
+    if (data.advogado_foto_url) {
+      const img = document.getElementById('fotoAdvogado');
+      img.src = data.advogado_foto_url;
+      img.style.display = 'block';
+    } else {
+      const ini = document.getElementById('iniciaisAdvogado');
+      ini.textContent = data.advogado_iniciais || '--';
+      ini.style.display = 'flex';
+    }
+  } catch (err) {
+    document.getElementById('carregando').style.display = 'none';
+    document.getElementById('invalidoBox').style.display = 'block';
+  }
+}
+
+function mostrarResultado(tipo, emoji, texto, detalhe) {
+  const card = document.getElementById('cardResultado');
+  card.className = 'card-alerta show ' + tipo;
+  document.getElementById('resultadoEmoji').textContent = emoji;
+  document.getElementById('resultadoTexto').textContent = texto;
+  document.getElementById('resultadoDetalhe').textContent = detalhe || '';
+  falarTexto(texto);
+  card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+async function verificar() {
+  const btn = document.getElementById('btnVerificar');
+  setLoading(btn, true, '<span class="ic">🔍</span> Verificar contato agora', 'Verificando...');
+  try {
+    const resp = await fetch('/api/cliente-publico/contato-ativo/' + encodeURIComponent(TOKEN));
+    const data = await resp.json();
+    if (data.contato_ativo) {
+      mostrarResultado(
+        'verde', '✅',
+        'Contato confirmado. Seu advogado ou escritório iniciou um contato seguro agora.',
+        `Canal: ${data.canal_autorizado || '—'} • Início: ${data.iniciado_em || '—'} • Mesmo assim, nunca envie dinheiro sem confirmar pelo canal oficial.`
+      );
+    } else {
+      mostrarResultado(
+        'vermelho', '🚫',
+        'Não existe contato autorizado neste momento.',
+        'Não envie dinheiro, documentos ou dados pessoais. Esse contato pode ser tentativa de golpe.'
+      );
+    }
+  } catch (err) {
+    csShowAlert('Não foi possível verificar agora. Tente novamente.', 'erro');
+  } finally {
+    setLoading(btn, false, '<span class="ic">🔍</span> Verificar contato agora');
+  }
+}
+
+async function registrarAlerta(tipo) {
+  csHideAlert();
+  try {
+    const resp = await fetch('/api/cliente-publico/registrar-alerta/' + encodeURIComponent(TOKEN), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tipo })
+    });
+    const data = await resp.json();
+    csShowAlert(data.mensagem, 'sucesso');
+    falarTexto(data.mensagem);
+    if (tipo === 'pix') {
+      mostrarResultado('vermelho', '🚨', 'Alerta de golpe registrado.', data.mensagem);
+    }
+  } catch (err) {
+    csShowAlert('Não foi possível registrar agora. Tente novamente.', 'erro');
+  }
+}
+
+function falarComEscritorio() {
+  if (!dadosAtuais || !dadosAtuais.advogado_telefone_oficial) {
+    csShowAlert('Número oficial não cadastrado. Entre em contato pelos canais que você já conhece do escritório.', 'erro');
+    return;
+  }
+  const numero = dadosAtuais.advogado_telefone_oficial.replace(/\D/g, '');
+  const numeroComPais = numero.startsWith('55') ? numero : '55' + numero;
+  const mensagem = encodeURIComponent('Olá, estou usando o ADVOGO SEGURO e quero confirmar um contato recebido.');
+  window.open(`https://wa.me/${numeroComPais}?text=${mensagem}`, '_blank');
+}
+
+async function analisarMensagem() {
+  csHideAlert();
+  const texto = document.getElementById('textoSuspeito').value.trim();
+  const caixa = document.getElementById('resultadoIA');
+  if (!texto) {
+    csShowAlert('Cole a mensagem recebida antes de analisar.', 'erro');
+    return;
+  }
+  try {
+    const resp = await fetch('/api/cliente-publico/analisar-golpe/' + encodeURIComponent(TOKEN), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ texto_mensagem: texto })
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      csShowAlert(data.erro || data.mensagem || 'Não foi possível analisar agora.', 'erro');
+      return;
+    }
+    const cores = {
+      'crítico': ['var(--cs-vermelho-bg)', 'var(--cs-vermelho)'],
+      'alto': ['var(--cs-vermelho-bg)', 'var(--cs-vermelho)'],
+      'médio': ['var(--cs-amarelo-bg)', '#7a570a'],
+      'baixo': ['var(--cs-verde-bg)', 'var(--cs-verde)']
+    };
+    const [bg, txt] = cores[data.risco] || ['var(--cs-cinza-claro)', 'var(--cs-texto)'];
+    caixa.style.background = bg;
+    caixa.style.color = txt;
+    caixa.className = 'cs-resultado-ia show';
+    caixa.innerHTML = `<b>Risco: ${escapeHtml(data.risco.toUpperCase())}</b><br>${escapeHtml(data.mensagem_para_cliente)}`;
+    falarTexto(data.mensagem_para_cliente);
+  } catch (err) {
+    csShowAlert('Não foi possível analisar agora. Tente novamente.', 'erro');
+  }
+}
+
+carregar();
+</script>
+</body>
+</html>

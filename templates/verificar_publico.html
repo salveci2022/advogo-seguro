@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Verificar contato suspeito — ADVOGO SEGURO</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+<header class="navbar-public">
+  <div class="container-narrow">
+    <div class="brand"><span class="shield">🛡️</span> ADVOGO SEGURO</div>
+    <nav>
+      <a href="/escritorio/login">Sou Escritório</a>
+      <a href="/cliente/login">Sou Cliente</a>
+    </nav>
+  </div>
+</header>
+
+<div class="container-narrow">
+  <div class="verify-public-card">
+    <h2 style="color:var(--azul-escuro); margin-top:0;">🔍 Verificar contato suspeito</h2>
+    <p style="color:var(--texto-suave); line-height:1.6;">
+      Recebeu uma ligação, mensagem ou e-mail de alguém se identificando como advogado e quer confirmar se é legítimo?
+      Informe o código do processo (fornecido pelo seu escritório) e o número que entrou em contato.
+    </p>
+
+    <div id="alertaVerificacaoPublica" class="alert-box"></div>
+
+    <form id="formVerificarPublico">
+      <div class="form-group">
+        <label>Código do processo</label>
+        <input type="text" class="form-control" id="vCodigo" required placeholder="Ex: AB12CD34" style="text-transform:uppercase;">
+        <div class="helper-text">Esse código foi fornecido pelo escritório responsável pelo seu caso.</div>
+      </div>
+      <div class="form-group">
+        <label>Número que entrou em contato</label>
+        <input type="text" class="form-control" id="vNumero" required placeholder="(61) 99999-9999">
+      </div>
+      <div class="form-group">
+        <label>Canal de contato</label>
+        <select class="form-control" id="vCanal">
+          <option value="whatsapp">💬 WhatsApp</option>
+          <option value="ligacao">📞 Ligação</option>
+          <option value="videochamada">🎥 Videochamada</option>
+          <option value="email">✉️ E-mail</option>
+        </select>
+      </div>
+      <div class="form-group" style="display:flex; align-items:center; gap:10px;">
+        <input type="checkbox" id="vPagamento" style="width:auto;">
+        <label for="vPagamento" style="margin:0;">A pessoa pediu pagamento (Pix/transferência)?</label>
+      </div>
+      <div class="form-group">
+        <label>Descrição (opcional)</label>
+        <textarea class="form-control" id="vDescricao" placeholder="Conte o que essa pessoa disse..."></textarea>
+      </div>
+      <button type="submit" class="btn-spy btn-spy-primary btn-spy-block" id="btnVerificar">🔍 Verificar agora</button>
+    </form>
+
+    <div class="resultado-box" id="resultadoBox">
+      <div class="titulo"><span class="ic" id="resultadoIcone">•</span> <span id="resultadoTitulo">—</span></div>
+      <div id="resultadoMensagem"></div>
+    </div>
+
+    <p class="helper-text" style="margin-top:22px; text-align:center;">
+      Já é cliente cadastrado? <a href="/cliente/login" style="color:var(--azul-medio); font-weight:700;">Faça login para ver todos os seus processos</a>
+    </p>
+  </div>
+</div>
+
+<footer class="footer-spy">
+  ADVOGO SEGURO — SPYNET Tecnologia Forense &amp; Soluções Digitais Ltda.
+</footer>
+
+<script src="{{ url_for('static', filename='js/api.js') }}"></script>
+<script>
+function configurarResultado(resultado, alertaNivel, mensagem) {
+  const box = document.getElementById('resultadoBox');
+  const icone = document.getElementById('resultadoIcone');
+  const titulo = document.getElementById('resultadoTitulo');
+  const msg = document.getElementById('resultadoMensagem');
+
+  box.className = 'resultado-box show';
+  if (resultado === 'confirmado') {
+    box.classList.add('verde');
+    icone.textContent = '✅';
+    titulo.textContent = 'Contato confirmado';
+  } else if (alertaNivel === 'alto') {
+    box.classList.add('vermelho');
+    icone.textContent = '🚨';
+    titulo.textContent = 'Alerta alto: possível golpe';
+  } else {
+    box.classList.add('amarelo');
+    icone.textContent = '⚠️';
+    titulo.textContent = 'Atenção';
+  }
+  msg.textContent = mensagem;
+  box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+document.getElementById('formVerificarPublico').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  hideAlert('alertaVerificacaoPublica');
+  const btn = document.getElementById('btnVerificar');
+  setLoading(btn, true, '🔍 Verificar agora', 'Verificando...');
+
+  try {
+    const data = await apiRequest('/api/publico/verificar', {
+      method: 'POST',
+      auth: false,
+      body: {
+        numero: document.getElementById('vNumero').value.trim(),
+        codigo: document.getElementById('vCodigo').value.trim(),
+        canal: document.getElementById('vCanal').value,
+        pediu_pagamento: document.getElementById('vPagamento').checked,
+        descricao: document.getElementById('vDescricao').value.trim()
+      }
+    });
+    configurarResultado(data.resultado, data.alerta_nivel, data.mensagem);
+  } catch (err) {
+    showAlert('alertaVerificacaoPublica', err.message, 'erro');
+  } finally {
+    setLoading(btn, false, '🔍 Verificar agora');
+  }
+});
+</script>
+</body>
+</html>

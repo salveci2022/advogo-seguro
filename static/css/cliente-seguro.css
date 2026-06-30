@@ -1,0 +1,243 @@
+/* ============================================================
+   cliente-seguro.css
+   Estilo independente do PAINEL DO CLIENTE (ADVOGO SEGURO)
+   Mobile-first, visual de aplicativo, sem dependência do CSS
+   usado no painel administrativo do escritório.
+   ============================================================ */
+
+:root {
+  --cs-azul-escuro: #0a1f3d;
+  --cs-azul-medio: #15397a;
+  --cs-branco: #ffffff;
+  --cs-cinza-claro: #f4f6fb;
+  --cs-cinza-borda: #e6e9f0;
+  --cs-texto: #1b2535;
+  --cs-texto-suave: #6b7488;
+  --cs-verde: #0f9d63;
+  --cs-verde-bg: #e8f8ef;
+  --cs-vermelho: #d8332a;
+  --cs-vermelho-bg: #fdeceb;
+  --cs-amarelo: #c98a06;
+  --cs-amarelo-bg: #fff6e0;
+  --cs-dourado: #b9923f;
+  --cs-sombra: 0 8px 24px rgba(10, 31, 61, 0.10);
+  --cs-radius: 18px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--cs-cinza-claro);
+  color: var(--cs-texto);
+  font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { text-decoration: none; color: inherit; }
+button { font-family: inherit; cursor: pointer; }
+textarea, input { font-family: inherit; }
+
+/* ---------- Topo ---------- */
+.cs-topo {
+  background: var(--cs-azul-escuro);
+  color: var(--cs-branco);
+  padding: 22px 18px 26px;
+  text-align: center;
+  border-bottom-left-radius: 26px;
+  border-bottom-right-radius: 26px;
+}
+.cs-topo .cs-marca { font-size: 1.3rem; font-weight: 900; letter-spacing: 0.3px; }
+.cs-topo .cs-subtitulo { font-size: 0.85rem; color: var(--cs-dourado); font-weight: 700; margin-top: 4px; }
+
+/* ---------- Container principal ---------- */
+.cs-container {
+  max-width: 460px;
+  margin: -14px auto 0;
+  padding: 0 16px 60px;
+}
+
+/* ---------- Cartão do advogado ---------- */
+.cs-card-advogado {
+  background: var(--cs-branco);
+  border-radius: var(--cs-radius);
+  box-shadow: var(--cs-sombra);
+  padding: 22px 18px;
+  text-align: center;
+  margin-bottom: 16px;
+}
+.cs-avatar {
+  width: 84px; height: 84px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 3px solid var(--cs-dourado);
+  margin: 0 auto 10px;
+  display: block;
+}
+.cs-avatar-iniciais {
+  width: 84px; height: 84px;
+  border-radius: 50%;
+  background: var(--cs-azul-escuro);
+  color: var(--cs-dourado);
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: 1.5rem;
+  margin: 0 auto 10px;
+  border: 3px solid var(--cs-dourado);
+}
+.cs-nome-advogado { font-size: 1.1rem; font-weight: 800; color: var(--cs-azul-escuro); }
+.cs-meta-advogado { font-size: 0.83rem; color: var(--cs-texto-suave); margin-top: 2px; }
+
+/* ---------- Card de pergunta principal ---------- */
+.cs-card-pergunta {
+  background: var(--cs-branco);
+  border-radius: var(--cs-radius);
+  box-shadow: var(--cs-sombra);
+  padding: 22px 18px;
+  text-align: center;
+  margin-bottom: 16px;
+}
+.cs-card-pergunta .cs-titulo { font-size: 1.1rem; font-weight: 800; color: var(--cs-azul-escuro); margin-bottom: 4px; }
+.cs-card-pergunta .cs-texto { color: var(--cs-texto-suave); font-size: 0.95rem; line-height: 1.5; margin-bottom: 16px; }
+
+/* ---------- Botões arredondados (padrão pedido no briefing) ---------- */
+.btn-rounded {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  width: 100%;
+  border: none;
+  border-radius: 999px;
+  padding: 16px 20px;
+  font-size: 1rem;
+  font-weight: 800;
+  margin-bottom: 12px;
+  transition: transform .12s, opacity .12s;
+}
+.btn-rounded:last-child { margin-bottom: 0; }
+.btn-rounded:hover { transform: translateY(-1px); }
+.btn-rounded:disabled { opacity: 0.6; cursor: not-allowed; }
+.btn-rounded .ic { font-size: 1.15rem; }
+
+.btn-alerta-verde { background: var(--cs-verde); color: #ffffff; }
+.btn-alerta-vermelho { background: var(--cs-vermelho); color: #ffffff; }
+.btn-alerta-amarelo { background: var(--cs-amarelo); color: #ffffff; }
+.btn-acao-azul { background: var(--cs-azul-escuro); color: var(--cs-dourado); }
+.btn-acao-azul:hover { background: var(--cs-azul-medio); }
+.btn-cinza { background: var(--cs-cinza-claro); color: var(--cs-azul-escuro); border: 1.5px solid var(--cs-cinza-borda); }
+
+/* ---------- Card de alerta (resultado verde/vermelho/amarelo) ---------- */
+.card-alerta {
+  border-radius: var(--cs-radius);
+  padding: 26px 18px;
+  text-align: center;
+  color: #ffffff;
+  margin-bottom: 16px;
+  display: none;
+}
+.card-alerta.show { display: block; }
+.card-alerta.verde { background: var(--cs-verde); }
+.card-alerta.vermelho { background: var(--cs-vermelho); }
+.card-alerta.amarelo { background: var(--cs-amarelo); }
+.card-alerta .cs-emoji { font-size: 2.6rem; margin-bottom: 8px; }
+.card-alerta .cs-resultado-texto { font-size: 1.05rem; font-weight: 800; line-height: 1.4; }
+.card-alerta .cs-detalhe { font-size: 0.85rem; font-weight: 500; margin-top: 8px; opacity: 0.92; }
+
+/* ---------- Card genérico (IA, formulários) ---------- */
+.cs-card {
+  background: var(--cs-branco);
+  border-radius: var(--cs-radius);
+  box-shadow: var(--cs-sombra);
+  padding: 20px 18px;
+  margin-bottom: 16px;
+}
+.cs-card .cs-titulo-card { font-size: 1rem; font-weight: 800; color: var(--cs-azul-escuro); margin-bottom: 10px; text-align: center; }
+
+.cs-textarea {
+  width: 100%;
+  min-height: 100px;
+  border: 1.5px solid var(--cs-cinza-borda);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 0.95rem;
+  resize: vertical;
+  margin-bottom: 12px;
+  color: var(--cs-texto);
+}
+.cs-textarea:focus { outline: none; border-color: var(--cs-azul-medio); }
+
+.cs-resultado-ia {
+  display: none;
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: 12px;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+.cs-resultado-ia.show { display: block; }
+
+/* ---------- Avisos de segurança ---------- */
+.cs-aviso-seguranca {
+  background: var(--cs-amarelo-bg);
+  color: #7a570a;
+  border: 1px solid #f0d98c;
+  border-radius: 14px;
+  padding: 14px 16px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  line-height: 1.45;
+  text-align: center;
+  margin-top: 6px;
+}
+
+.cs-alert-box {
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 0.88rem;
+  margin-bottom: 14px;
+  display: none;
+}
+.cs-alert-box.show { display: block; }
+.cs-alert-box.erro { background: var(--cs-vermelho-bg); color: var(--cs-vermelho); border: 1px solid #f3c6c3; }
+.cs-alert-box.sucesso { background: var(--cs-verde-bg); color: var(--cs-verde); border: 1px solid #bfe9d3; }
+
+/* ---------- Estado de link inválido ---------- */
+.cs-invalido {
+  text-align: center;
+  background: var(--cs-vermelho-bg);
+  color: var(--cs-vermelho);
+  border: 1px solid #f3c6c3;
+  border-radius: var(--cs-radius);
+  padding: 26px 20px;
+  margin-top: 24px;
+}
+
+.cs-carregando {
+  text-align: center;
+  color: var(--cs-texto-suave);
+  padding: 40px 20px;
+  font-size: 0.95rem;
+}
+
+.spinner {
+  width: 16px; height: 16px; border-radius: 50%;
+  border: 2.5px solid rgba(255,255,255,0.4);
+  border-top-color: #fff;
+  animation: cs-spin 0.7s linear infinite;
+  display: inline-block;
+}
+@keyframes cs-spin { to { transform: rotate(360deg); } }
+
+/* ---------- Rodapé ---------- */
+.cs-rodape {
+  text-align: center;
+  font-size: 0.75rem;
+  color: var(--cs-texto-suave);
+  margin-top: 22px;
+  padding-top: 14px;
+  border-top: 1px solid var(--cs-cinza-borda);
+}
+
+/* ---------- Ajustes para telas bem pequenas ---------- */
+@media (max-width: 360px) {
+  .cs-avatar, .cs-avatar-iniciais { width: 72px; height: 72px; }
+  .btn-rounded { padding: 14px 16px; font-size: 0.95rem; }
+}
