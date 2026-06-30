@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/logo-icone.svg') }}">
 <title>ADVOGO SEGURO — Sistema anti-golpe do falso advogado</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
@@ -10,7 +11,7 @@
 
 <header class="navbar-public">
   <div class="container-narrow">
-    <div class="brand"><span class="shield">🛡️</span> ADVOGO SEGURO</div>
+    <div class="brand"><img src="{{ url_for('static', filename='img/logo-icone.svg') }}" class="brand-logo" alt="ADVOGO SEGURO"> ADVOGO SEGURO</div>
     <nav>
       <a href="/verificar">Verificar contato</a>
       <a href="/escritorio/login">Sou Escritório</a>

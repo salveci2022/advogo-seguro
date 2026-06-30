@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/logo-icone.svg') }}">
 <title>Relatórios — ADVOGO SEGURO</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
@@ -10,7 +11,7 @@
 
 <div class="mobile-topbar">
   <button onclick="toggleSidebar()">☰</button>
-  <div class="brand" style="font-size:1rem;">🛡️ ADVOGO SEGURO</div>
+  <div class="brand" style="font-size:1rem;"><img src="{{ url_for('static', filename='img/logo-icone.svg') }}" class="brand-logo" alt="ADVOGO SEGURO"> ADVOGO SEGURO</div>
   <div></div>
 </div>
 

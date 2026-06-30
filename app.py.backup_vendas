@@ -1830,11 +1830,6 @@ def pagina_verificar_publico():
     return render_template('verificar_publico.html')
 
 
-@app.route('/vendas')
-def pagina_vendas():
-    return render_template('vendas.html')
-
-
 @app.route('/escritorio/login')
 def pagina_escritorio_login():
     return render_template('escritorio_login.html')

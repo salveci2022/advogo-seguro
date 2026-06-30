@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/logo-icone.svg') }}">
 <title>Cadastro do Escritório — ADVOGO SEGURO</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
@@ -11,7 +12,7 @@
 <div class="auth-wrap">
   <div class="auth-side">
     <div class="brand" style="display:flex;align-items:center;gap:10px;font-weight:800;font-size:1.3rem;margin-bottom:30px;">
-      <span style="color:var(--dourado);font-size:1.6rem;">🛡️</span> ADVOGO SEGURO
+      <img src="{{ url_for('static', filename='img/logo-icone.svg') }}" class="brand-logo" alt="ADVOGO SEGURO"> ADVOGO SEGURO
     </div>
     <h2>Proteja seus clientes</h2>
     <p>Cadastre seu escritório e comece a emitir códigos únicos de verificação para cada processo, protegendo seus clientes contra golpes em seu nome.</p>
@@ -21,7 +22,7 @@
 
   <div class="auth-form-col">
     <div class="auth-card">
-      <div class="brand" style="font-weight:800; font-size:1.1rem; display:flex; gap:8px; align-items:center;">🛡️ ADVOGO SEGURO</div>
+      <div class="brand" style="font-weight:800; font-size:1.1rem; display:flex; gap:8px; align-items:center;"><img src="{{ url_for('static', filename='img/logo-icone.svg') }}" class="brand-logo" alt="ADVOGO SEGURO"> ADVOGO SEGURO</div>
       <div class="sub">Crie a conta do seu escritório</div>
 
       <div id="alertaCadastro" class="alert-box"></div>

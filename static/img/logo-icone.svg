@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="escudoFundo" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#15397a"/>
+      <stop offset="100%" stop-color="#0a1f3d"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Corpo do escudo -->
+  <path d="M32 3
+           L56 11
+           V29
+           C56 45 46 56 32 61
+           C18 56 8 45 8 29
+           V11
+           Z"
+        fill="url(#escudoFundo)"
+        stroke="#b9923f"
+        stroke-width="2.2"/>
+
+  <!-- Borda interna dourada discreta -->
+  <path d="M32 8
+           L51 14.5
+           V29
+           C51 42 43.5 51 32 55.4
+           C20.5 51 13 42 13 29
+           V14.5
+           Z"
+        fill="none"
+        stroke="#b9923f"
+        stroke-width="0.8"
+        opacity="0.5"/>
+
+  <!-- Balança da justiça estilizada (haste + pratos), em dourado -->
+  <g stroke="#d9c98a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <line x1="32" y1="18" x2="32" y2="40"/>
+    <line x1="21" y1="24" x2="43" y2="24"/>
+    <path d="M21 24 L17 32 a4.4 4.4 0 0 0 8 0 Z"/>
+    <path d="M43 24 L39 32 a4.4 4.4 0 0 0 8 0 Z"/>
+    <line x1="26" y1="41" x2="38" y2="41"/>
+  </g>
+
+  <!-- Check de verificação, canto inferior direito -->
+  <circle cx="46" cy="42" r="11" fill="#0f9d63" stroke="#0a1f3d" stroke-width="2"/>
+  <path d="M41 42 L44.5 45.5 L51.5 38.5" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>

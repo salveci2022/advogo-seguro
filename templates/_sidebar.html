@@ -1,5 +1,5 @@
 <div class="sidebar" id="sidebarEl">
-  <div class="brand">🛡️ ADVOGO SEGURO</div>
+  <div class="brand"><img src="{{ url_for('static', filename='img/logo-icone.svg') }}" class="brand-logo" alt="ADVOGO SEGURO"> ADVOGO SEGURO</div>
   <div class="plano-tag" id="planoTag">PLANO: —</div>
   <nav>
     <a href="/escritorio/painel" data-path="/escritorio/painel" class="{{ 'active' if active == 'dashboard' else '' }}"><span class="ic">📊</span> Dashboard</a>
