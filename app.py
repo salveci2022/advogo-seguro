@@ -9,6 +9,7 @@ Padrão de arquitetura: igual SAE Fácil / NEXORA / PANIFICA PRO 360
 
 import os
 import hashlib
+import logging
 import secrets
 import string
 from datetime import datetime, timedelta
@@ -17,6 +18,8 @@ from functools import wraps
 from flask import Flask, request, jsonify, render_template, Response
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
+from sqlalchemy.exc import SQLAlchemyError
+from werkzeug.exceptions import HTTPException
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 import jwt
@@ -34,6 +37,10 @@ import io as io_module
 # ──────────────────────────────────────────────
 
 app = Flask(__name__)
+
+if not app.logger.handlers:
+    logging.basicConfig(level=logging.INFO)
+app.logger.setLevel(logging.INFO)
 
 ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', '*')
 if ALLOWED_ORIGINS == '*':
@@ -74,6 +81,28 @@ UPLOAD_TAMANHO_MAXIMO_BYTES = 3 * 1024 * 1024  # 3 MB
 UPLOAD_PASTA_ADVOGADOS = os.path.join(app.root_path, 'static', 'uploads', 'advogados')
 os.makedirs(UPLOAD_PASTA_ADVOGADOS, exist_ok=True)
 app.config['MAX_CONTENT_LENGTH'] = UPLOAD_TAMANHO_MAXIMO_BYTES
+
+
+# ──────────────────────────────────────────────
+# TRATAMENTO GLOBAL DE ERROS
+# ──────────────────────────────────────────────
+# Qualquer exceção não tratada explicitamente numa rota cai aqui: o erro
+# técnico completo vai para o log do servidor, e o cliente recebe uma
+# mensagem genérica e segura (nunca detalhes de banco/stacktrace).
+
+@app.errorhandler(HTTPException)
+def tratar_http_exception(erro):
+    resposta = erro.get_response()
+    resposta.data = jsonify({'erro': erro.description or 'Requisição inválida'}).get_data()
+    resposta.content_type = 'application/json'
+    return resposta
+
+
+@app.errorhandler(Exception)
+def tratar_erro_inesperado(erro):
+    db.session.rollback()
+    app.logger.exception('Erro inesperado não tratado: %s', erro)
+    return jsonify({'erro': 'Não foi possível concluir a operação. Tente novamente em instantes.'}), 500
 
 
 # ──────────────────────────────────────────────
@@ -145,11 +174,12 @@ class Escritorio(db.Model):
 class Advogado(db.Model):
     __tablename__ = 'advogados'
     id = db.Column(db.Integer, primary_key=True)
-    escritorio_id = db.Column(db.Integer, db.ForeignKey('escritorios.id'), nullable=False)
+    escritorio_id = db.Column(db.Integer, db.ForeignKey('escritorios.id', ondelete='CASCADE'), nullable=False)
     nome = db.Column(db.String(200), nullable=False)
     oab = db.Column(db.String(30))
     telefone_oficial = db.Column(db.String(20), nullable=False)
     foto_url = db.Column(db.String(500))
+    ativo = db.Column(db.Boolean, default=True, nullable=False)
     criado_em = db.Column(db.DateTime, default=datetime.utcnow)
 
 
@@ -160,19 +190,20 @@ class Cliente(db.Model):
     telefone = db.Column(db.String(20), nullable=False)
     email = db.Column(db.String(200))
     senha_hash = db.Column(db.String(200), nullable=False)
+    ativo = db.Column(db.Boolean, default=True, nullable=False)
     criado_em = db.Column(db.DateTime, default=datetime.utcnow)
     reset_token = db.Column(db.String(100))
     reset_token_expira = db.Column(db.DateTime)
 
-    verificacoes = db.relationship('Verificacao', backref='cliente', lazy=True)
+    verificacoes = db.relationship('Verificacao', backref='cliente', lazy=True, cascade='all, delete-orphan')
 
 
 class Processo(db.Model):
     __tablename__ = 'processos'
     id = db.Column(db.Integer, primary_key=True)
-    escritorio_id = db.Column(db.Integer, db.ForeignKey('escritorios.id'), nullable=False)
-    advogado_id = db.Column(db.Integer, db.ForeignKey('advogados.id'), nullable=False)
-    cliente_id = db.Column(db.Integer, db.ForeignKey('clientes.id'), nullable=False)
+    escritorio_id = db.Column(db.Integer, db.ForeignKey('escritorios.id', ondelete='CASCADE'), nullable=False)
+    advogado_id = db.Column(db.Integer, db.ForeignKey('advogados.id', ondelete='CASCADE'), nullable=False)
+    cliente_id = db.Column(db.Integer, db.ForeignKey('clientes.id', ondelete='CASCADE'), nullable=False)
     codigo_unico = db.Column(db.String(12), unique=True, nullable=False)
     numero_processo = db.Column(db.String(60))
     descricao = db.Column(db.String(300))
@@ -182,13 +213,13 @@ class Processo(db.Model):
 
     advogado = db.relationship('Advogado', backref='processos', lazy=True)
     cliente = db.relationship('Cliente', backref='processos', lazy=True)
-    tentativas = db.relationship('TentativaContato', backref='processo', lazy=True)
+    tentativas = db.relationship('TentativaContato', backref='processo', lazy=True, cascade='all, delete-orphan')
 
 
 class Verificacao(db.Model):
     __tablename__ = 'verificacoes'
     id = db.Column(db.Integer, primary_key=True)
-    cliente_id = db.Column(db.Integer, db.ForeignKey('clientes.id'), nullable=False)
+    cliente_id = db.Column(db.Integer, db.ForeignKey('clientes.id', ondelete='CASCADE'), nullable=False)
     numero_consultado = db.Column(db.String(20), nullable=False)
     codigo_consultado = db.Column(db.String(12))
     resultado = db.Column(db.String(20))  # confirmado | nao_encontrado | numero_diferente
@@ -198,7 +229,7 @@ class Verificacao(db.Model):
 class TentativaContato(db.Model):
     __tablename__ = 'tentativas_contato'
     id = db.Column(db.Integer, primary_key=True)
-    processo_id = db.Column(db.Integer, db.ForeignKey('processos.id'), nullable=False)
+    processo_id = db.Column(db.Integer, db.ForeignKey('processos.id', ondelete='CASCADE'), nullable=False)
     numero_suspeito = db.Column(db.String(20))
     canal = db.Column(db.String(30))  # whatsapp | ligacao | videochamada | email
     descricao = db.Column(db.String(500))
@@ -216,10 +247,10 @@ class ContatoSeguro(db.Model):
     """
     __tablename__ = 'contatos_seguros'
     id = db.Column(db.Integer, primary_key=True)
-    escritorio_id = db.Column(db.Integer, db.ForeignKey('escritorios.id'), nullable=False)
-    advogado_id = db.Column(db.Integer, db.ForeignKey('advogados.id'), nullable=False)
-    cliente_id = db.Column(db.Integer, db.ForeignKey('clientes.id'), nullable=False)
-    processo_id = db.Column(db.Integer, db.ForeignKey('processos.id'), nullable=True)
+    escritorio_id = db.Column(db.Integer, db.ForeignKey('escritorios.id', ondelete='CASCADE'), nullable=False)
+    advogado_id = db.Column(db.Integer, db.ForeignKey('advogados.id', ondelete='CASCADE'), nullable=False)
+    cliente_id = db.Column(db.Integer, db.ForeignKey('clientes.id', ondelete='CASCADE'), nullable=False)
+    processo_id = db.Column(db.Integer, db.ForeignKey('processos.id', ondelete='CASCADE'), nullable=True)
     codigo_cca = db.Column(db.String(20), unique=True, nullable=False)
     canal = db.Column(db.String(30), nullable=False)  # whatsapp | ligacao | videochamada | email
     status = db.Column(db.String(20), default='ativo')  # ativo | expirado | usado | cancelado
@@ -233,6 +264,7 @@ class ContatoSeguro(db.Model):
     advogado = db.relationship('Advogado')
     cliente = db.relationship('Cliente')
     processo = db.relationship('Processo')
+    logs = db.relationship('ContatoSeguroLog', backref='contato_seguro', lazy=True, cascade='all, delete-orphan')
 
     def status_atual(self):
         """Recalcula o status no momento da leitura, sem nunca tratar um código vencido como válido."""
@@ -247,8 +279,8 @@ class ContatoSeguroLog(db.Model):
     """Log de auditoria de toda consulta feita pelo cliente (mesmo quando não há contato ativo)."""
     __tablename__ = 'contatos_seguros_logs'
     id = db.Column(db.Integer, primary_key=True)
-    cliente_id = db.Column(db.Integer, db.ForeignKey('clientes.id'), nullable=False)
-    contato_seguro_id = db.Column(db.Integer, db.ForeignKey('contatos_seguros.id'), nullable=True)
+    cliente_id = db.Column(db.Integer, db.ForeignKey('clientes.id', ondelete='CASCADE'), nullable=False)
+    contato_seguro_id = db.Column(db.Integer, db.ForeignKey('contatos_seguros.id', ondelete='CASCADE'), nullable=True)
     encontrado_ativo = db.Column(db.Boolean, default=False)
     ip = db.Column(db.String(60))
     criado_em = db.Column(db.DateTime, default=datetime.utcnow)
@@ -258,10 +290,115 @@ class AcessoPublicoLog(db.Model):
     """Auditoria de acesso ao link público do cliente (/cliente/seguro/<token>) — Sprint 3."""
     __tablename__ = 'acessos_publicos_logs'
     id = db.Column(db.Integer, primary_key=True)
-    processo_id = db.Column(db.Integer, db.ForeignKey('processos.id'), nullable=True)
+    processo_id = db.Column(db.Integer, db.ForeignKey('processos.id', ondelete='CASCADE'), nullable=True)
     acao = db.Column(db.String(40))  # visualizou | verificou | alerta_pix | nao_reconheco
     ip = db.Column(db.String(60))
     criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+# ──────────────────────────────────────────────
+# MIGRAÇÃO SEGURA (adiciona colunas novas sem apagar dados existentes)
+# ──────────────────────────────────────────────
+# db.create_all() só cria tabelas que ainda não existem — nunca altera uma
+# tabela já existente no Postgres do Render. Como este projeto não usa
+# Alembic/Flask-Migrate, novas colunas precisam ser adicionadas manualmente
+# aqui, de forma idempotente (só roda se a coluna ainda não existir) e sem
+# nenhuma operação destrutiva.
+
+def _garantir_colunas_novas():
+    from sqlalchemy import inspect, text
+
+    inspetor = inspect(db.engine)
+    colunas_necessarias = [
+        ('advogados', 'ativo', 'BOOLEAN NOT NULL DEFAULT TRUE'),
+        ('clientes', 'ativo', 'BOOLEAN NOT NULL DEFAULT TRUE'),
+    ]
+    for tabela, coluna, definicao_sql in colunas_necessarias:
+        if not inspetor.has_table(tabela):
+            continue
+        colunas_existentes = {c['name'] for c in inspetor.get_columns(tabela)}
+        if coluna in colunas_existentes:
+            continue
+        with db.engine.begin() as conexao:
+            conexao.execute(text(f'ALTER TABLE {tabela} ADD COLUMN {coluna} {definicao_sql}'))
+        print(f'[MIGRACAO] Coluna "{coluna}" adicionada em "{tabela}".')
+
+
+# ──────────────────────────────────────────────
+# EXCLUSÃO SEGURA EM CASCATA
+# ──────────────────────────────────────────────
+# Cada função apaga primeiro os registros filhos (na ordem correta para não
+# violar nenhuma chave estrangeira) e só depois o registro principal.
+# Nenhuma função aqui faz commit — quem chama controla a transação e pode
+# fazer rollback caso algo dê errado no meio do processo.
+
+def _excluir_contatos_seguros_em_lote(contatos_seguros_ids):
+    """Apaga um conjunto de Contatos Seguros e os respectivos logs de auditoria."""
+    if not contatos_seguros_ids:
+        return
+    ContatoSeguroLog.query.filter(
+        ContatoSeguroLog.contato_seguro_id.in_(contatos_seguros_ids)
+    ).delete(synchronize_session=False)
+    ContatoSeguro.query.filter(
+        ContatoSeguro.id.in_(contatos_seguros_ids)
+    ).delete(synchronize_session=False)
+
+
+def _excluir_processo_em_cascata(processo):
+    """Apaga todos os registros filhos de um processo e, por fim, o processo."""
+    contatos_ids = [c.id for c in ContatoSeguro.query.filter_by(processo_id=processo.id).all()]
+    _excluir_contatos_seguros_em_lote(contatos_ids)
+    TentativaContato.query.filter_by(processo_id=processo.id).delete(synchronize_session=False)
+    AcessoPublicoLog.query.filter_by(processo_id=processo.id).delete(synchronize_session=False)
+    db.session.delete(processo)
+
+
+def _excluir_advogado_em_cascata(advogado, escritorio_id):
+    """Apaga o advogado, todos os processos dele (com seus filhos) e Contatos
+    Seguros vinculados diretamente a ele (sem processo associado)."""
+    processos = Processo.query.filter_by(advogado_id=advogado.id, escritorio_id=escritorio_id).all()
+    for processo in processos:
+        _excluir_processo_em_cascata(processo)
+
+    orfaos_ids = [
+        c.id for c in ContatoSeguro.query.filter_by(advogado_id=advogado.id, processo_id=None).all()
+    ]
+    _excluir_contatos_seguros_em_lote(orfaos_ids)
+    db.session.delete(advogado)
+
+
+def _cliente_possui_processos_de_outro_escritorio(cliente_id, escritorio_id):
+    return Processo.query.filter(
+        Processo.cliente_id == cliente_id, Processo.escritorio_id != escritorio_id
+    ).first() is not None
+
+
+def _excluir_cliente_em_cascata(cliente, escritorio_id):
+    """
+    Apaga todos os processos (e filhos) que este escritório tem com o
+    cliente. Só apaga o registro do Cliente em si se ele não pertencer
+    também a outro escritório (mesmo telefone pode estar vinculado a mais
+    de um escritório) — nesse caso preservamos o cliente e os dados do
+    outro escritório intactos.
+
+    Retorna True se o Cliente foi totalmente removido, False se foi apenas
+    desvinculado deste escritório e preservado por pertencer a outro.
+    """
+    processos = Processo.query.filter_by(cliente_id=cliente.id, escritorio_id=escritorio_id).all()
+    for processo in processos:
+        _excluir_processo_em_cascata(processo)
+
+    if _cliente_possui_processos_de_outro_escritorio(cliente.id, escritorio_id):
+        return False
+
+    orfaos_ids = [
+        c.id for c in ContatoSeguro.query.filter_by(cliente_id=cliente.id, processo_id=None).all()
+    ]
+    _excluir_contatos_seguros_em_lote(orfaos_ids)
+    ContatoSeguroLog.query.filter_by(cliente_id=cliente.id).delete(synchronize_session=False)
+    Verificacao.query.filter_by(cliente_id=cliente.id).delete(synchronize_session=False)
+    db.session.delete(cliente)
+    return True
 
 
 # ──────────────────────────────────────────────
@@ -565,7 +702,8 @@ def advogados():
     lista = Advogado.query.filter_by(escritorio_id=request.escritorio.id).all()
     return jsonify([{
         'id': a.id, 'nome': a.nome, 'oab': a.oab,
-        'telefone_oficial': a.telefone_oficial, 'foto_url': a.foto_url
+        'telefone_oficial': a.telefone_oficial, 'foto_url': a.foto_url,
+        'ativo': a.ativo
     } for a in lista])
 
 
@@ -577,10 +715,16 @@ def advogado_detalhe(advogado_id):
         return jsonify({'erro': 'Advogado não encontrado'}), 404
 
     if request.method == 'DELETE':
-        if Processo.query.filter_by(advogado_id=adv.id).first():
-            return jsonify({'erro': 'Não é possível excluir: este advogado possui processos vinculados.'}), 409
-        db.session.delete(adv)
-        db.session.commit()
+        data = request.get_json(silent=True) or {}
+        if (data.get('confirmacao') or '').strip().upper() != 'EXCLUIR':
+            return jsonify({'erro': 'Para excluir definitivamente, confirme digitando EXCLUIR.'}), 400
+        try:
+            _excluir_advogado_em_cascata(adv, request.escritorio.id)
+            db.session.commit()
+        except SQLAlchemyError as erro:
+            db.session.rollback()
+            app.logger.exception('Falha ao excluir advogado %s: %s', advogado_id, erro)
+            return jsonify({'erro': 'Não foi possível excluir o advogado. Nenhuma alteração foi salva.'}), 500
         return jsonify({'ok': True})
 
     data = request.get_json() or {}
@@ -590,6 +734,43 @@ def advogado_detalhe(advogado_id):
     adv.foto_url = data.get('foto_url', adv.foto_url)
     db.session.commit()
     return jsonify({'id': adv.id, 'nome': adv.nome})
+
+
+@app.route('/api/escritorio/advogados/<int:advogado_id>/resumo-exclusao', methods=['GET'])
+@login_escritorio_obrigatorio
+def resumo_exclusao_advogado(advogado_id):
+    adv = Advogado.query.filter_by(id=advogado_id, escritorio_id=request.escritorio.id).first()
+    if not adv:
+        return jsonify({'erro': 'Advogado não encontrado'}), 404
+
+    processos_ids = [p.id for p in Processo.query.filter_by(advogado_id=adv.id, escritorio_id=request.escritorio.id).all()]
+    return jsonify({
+        'processos': len(processos_ids),
+        'tentativas_suspeitas': TentativaContato.query.filter(TentativaContato.processo_id.in_(processos_ids)).count() if processos_ids else 0,
+        'contatos_seguros': ContatoSeguro.query.filter_by(advogado_id=adv.id).count(),
+    })
+
+
+@app.route('/api/escritorio/advogados/<int:advogado_id>/desativar', methods=['POST'])
+@login_escritorio_obrigatorio
+def desativar_advogado(advogado_id):
+    adv = Advogado.query.filter_by(id=advogado_id, escritorio_id=request.escritorio.id).first()
+    if not adv:
+        return jsonify({'erro': 'Advogado não encontrado'}), 404
+    adv.ativo = False
+    db.session.commit()
+    return jsonify({'ok': True, 'ativo': adv.ativo})
+
+
+@app.route('/api/escritorio/advogados/<int:advogado_id>/reativar', methods=['POST'])
+@login_escritorio_obrigatorio
+def reativar_advogado(advogado_id):
+    adv = Advogado.query.filter_by(id=advogado_id, escritorio_id=request.escritorio.id).first()
+    if not adv:
+        return jsonify({'erro': 'Advogado não encontrado'}), 404
+    adv.ativo = True
+    db.session.commit()
+    return jsonify({'ok': True, 'ativo': adv.ativo})
 
 
 def _extensao_permitida(filename):
@@ -704,9 +885,13 @@ def processo_detalhe(processo_id):
         return jsonify({'erro': 'Processo não encontrado'}), 404
 
     if request.method == 'DELETE':
-        TentativaContato.query.filter_by(processo_id=processo.id).delete()
-        db.session.delete(processo)
-        db.session.commit()
+        try:
+            _excluir_processo_em_cascata(processo)
+            db.session.commit()
+        except SQLAlchemyError as erro:
+            db.session.rollback()
+            app.logger.exception('Falha ao excluir processo %s: %s', processo_id, erro)
+            return jsonify({'erro': 'Não foi possível excluir o processo. Nenhuma alteração foi salva.'}), 500
         return jsonify({'ok': True})
 
     data = request.get_json() or {}
@@ -720,6 +905,21 @@ def processo_detalhe(processo_id):
         processo.status = data['status']
     db.session.commit()
     return jsonify({'id': processo.id, 'ok': True})
+
+
+@app.route('/api/escritorio/processos/<int:processo_id>/resumo-exclusao', methods=['GET'])
+@login_escritorio_obrigatorio
+def resumo_exclusao_processo(processo_id):
+    """Contagens exibidas no modal de confirmação antes de excluir um processo."""
+    processo = Processo.query.filter_by(id=processo_id, escritorio_id=request.escritorio.id).first()
+    if not processo:
+        return jsonify({'erro': 'Processo não encontrado'}), 404
+
+    return jsonify({
+        'tentativas_suspeitas': TentativaContato.query.filter_by(processo_id=processo.id).count(),
+        'contatos_seguros': ContatoSeguro.query.filter_by(processo_id=processo.id).count(),
+        'acessos_publicos': AcessoPublicoLog.query.filter_by(processo_id=processo.id).count(),
+    })
 
 
 @app.route('/api/escritorio/tentativas', methods=['GET'])
@@ -737,6 +937,157 @@ def listar_tentativas():
         'cliente_nome': t.processo.cliente.nome,
         'criado_em': t.criado_em.strftime('%d/%m/%Y %H:%M')
     } for t in tentativas])
+
+
+def _tentativa_pertence_ao_escritorio(tentativa, escritorio_id):
+    return tentativa.processo is not None and tentativa.processo.escritorio_id == escritorio_id
+
+
+@app.route('/api/escritorio/tentativas/<int:tentativa_id>', methods=['DELETE'])
+@login_escritorio_obrigatorio
+def excluir_tentativa(tentativa_id):
+    tentativa = TentativaContato.query.get(tentativa_id)
+    if not tentativa or not _tentativa_pertence_ao_escritorio(tentativa, request.escritorio.id):
+        return jsonify({'erro': 'Tentativa suspeita não encontrada.'}), 404
+    try:
+        db.session.delete(tentativa)
+        db.session.commit()
+    except SQLAlchemyError as erro:
+        db.session.rollback()
+        app.logger.exception('Falha ao excluir tentativa %s: %s', tentativa_id, erro)
+        return jsonify({'erro': 'Não foi possível excluir a tentativa suspeita.'}), 500
+    return jsonify({'ok': True})
+
+
+@app.route('/api/escritorio/tentativas/excluir-lote', methods=['POST'])
+@login_escritorio_obrigatorio
+def excluir_tentativas_lote():
+    data = request.get_json() or {}
+    ids = data.get('ids') or []
+    if not isinstance(ids, list) or not ids:
+        return jsonify({'erro': 'Selecione ao menos um registro para excluir.'}), 400
+
+    processos_ids = [p.id for p in Processo.query.filter_by(escritorio_id=request.escritorio.id).all()]
+    try:
+        removidos = TentativaContato.query.filter(
+            TentativaContato.id.in_(ids),
+            TentativaContato.processo_id.in_(processos_ids)
+        ).delete(synchronize_session=False)
+        db.session.commit()
+    except SQLAlchemyError as erro:
+        db.session.rollback()
+        app.logger.exception('Falha ao excluir tentativas em lote: %s', erro)
+        return jsonify({'erro': 'Não foi possível excluir os registros selecionados.'}), 500
+    return jsonify({'ok': True, 'excluidos': removidos})
+
+
+# ──────────────────────────────────────────────
+# CLIENTES
+# ──────────────────────────────────────────────
+
+def _serializar_cliente(cliente, escritorio_id):
+    processos_escritorio = [p for p in cliente.processos if p.escritorio_id == escritorio_id]
+    return {
+        'id': cliente.id,
+        'nome': cliente.nome,
+        'telefone': cliente.telefone,
+        'email': cliente.email,
+        'ativo': cliente.ativo,
+        'processos_count': len(processos_escritorio),
+        'criado_em': cliente.criado_em.strftime('%d/%m/%Y') if cliente.criado_em else None
+    }
+
+
+def _clientes_do_escritorio_query(escritorio_id):
+    cliente_ids = db.session.query(Processo.cliente_id).filter_by(escritorio_id=escritorio_id).distinct()
+    return Cliente.query.filter(Cliente.id.in_(cliente_ids))
+
+
+def _cliente_do_escritorio_ou_404(cliente_id, escritorio_id):
+    """Só retorna o cliente se ele tiver ao menos um processo neste escritório."""
+    pertence = Processo.query.filter_by(cliente_id=cliente_id, escritorio_id=escritorio_id).first()
+    if not pertence:
+        return None
+    return Cliente.query.get(cliente_id)
+
+
+@app.route('/api/escritorio/clientes', methods=['GET'])
+@login_escritorio_obrigatorio
+def listar_clientes():
+    lista = _clientes_do_escritorio_query(request.escritorio.id).order_by(Cliente.nome.asc()).all()
+    return jsonify([_serializar_cliente(c, request.escritorio.id) for c in lista])
+
+
+@app.route('/api/escritorio/clientes/<int:cliente_id>', methods=['PUT', 'DELETE'])
+@login_escritorio_obrigatorio
+def cliente_detalhe(cliente_id):
+    cliente = _cliente_do_escritorio_ou_404(cliente_id, request.escritorio.id)
+    if not cliente:
+        return jsonify({'erro': 'Cliente não encontrado neste escritório.'}), 404
+
+    if request.method == 'DELETE':
+        data = request.get_json(silent=True) or {}
+        if (data.get('confirmacao') or '').strip().upper() != 'EXCLUIR':
+            return jsonify({'erro': 'Para excluir definitivamente, confirme digitando EXCLUIR.'}), 400
+        try:
+            removido_totalmente = _excluir_cliente_em_cascata(cliente, request.escritorio.id)
+            db.session.commit()
+        except SQLAlchemyError as erro:
+            db.session.rollback()
+            app.logger.exception('Falha ao excluir cliente %s: %s', cliente_id, erro)
+            return jsonify({'erro': 'Não foi possível excluir o cliente. Nenhuma alteração foi salva.'}), 500
+        mensagem = ('Cliente e todos os registros vinculados foram excluídos.' if removido_totalmente
+                    else 'Os processos deste escritório com o cliente foram excluídos. O cadastro do '
+                         'cliente foi preservado por também pertencer a outro escritório.')
+        return jsonify({'ok': True, 'cliente_removido': removido_totalmente, 'mensagem': mensagem})
+
+    data = request.get_json() or {}
+    if 'nome' in data and data['nome'].strip():
+        cliente.nome = data['nome'].strip()
+    if 'telefone' in data and data['telefone'].strip():
+        cliente.telefone = ''.join(filter(str.isdigit, data['telefone']))
+    if 'email' in data:
+        cliente.email = data['email'].strip()
+    db.session.commit()
+    return jsonify(_serializar_cliente(cliente, request.escritorio.id))
+
+
+@app.route('/api/escritorio/clientes/<int:cliente_id>/resumo-exclusao', methods=['GET'])
+@login_escritorio_obrigatorio
+def resumo_exclusao_cliente(cliente_id):
+    cliente = _cliente_do_escritorio_ou_404(cliente_id, request.escritorio.id)
+    if not cliente:
+        return jsonify({'erro': 'Cliente não encontrado neste escritório.'}), 404
+
+    processos_ids = [p.id for p in Processo.query.filter_by(cliente_id=cliente.id, escritorio_id=request.escritorio.id).all()]
+    return jsonify({
+        'processos': len(processos_ids),
+        'tentativas_suspeitas': TentativaContato.query.filter(TentativaContato.processo_id.in_(processos_ids)).count() if processos_ids else 0,
+        'contatos_seguros': ContatoSeguro.query.filter_by(cliente_id=cliente.id).count(),
+        'compartilhado_com_outro_escritorio': _cliente_possui_processos_de_outro_escritorio(cliente.id, request.escritorio.id)
+    })
+
+
+@app.route('/api/escritorio/clientes/<int:cliente_id>/desativar', methods=['POST'])
+@login_escritorio_obrigatorio
+def desativar_cliente(cliente_id):
+    cliente = _cliente_do_escritorio_ou_404(cliente_id, request.escritorio.id)
+    if not cliente:
+        return jsonify({'erro': 'Cliente não encontrado neste escritório.'}), 404
+    cliente.ativo = False
+    db.session.commit()
+    return jsonify({'ok': True, 'ativo': cliente.ativo})
+
+
+@app.route('/api/escritorio/clientes/<int:cliente_id>/reativar', methods=['POST'])
+@login_escritorio_obrigatorio
+def reativar_cliente(cliente_id):
+    cliente = _cliente_do_escritorio_ou_404(cliente_id, request.escritorio.id)
+    if not cliente:
+        return jsonify({'erro': 'Cliente não encontrado neste escritório.'}), 404
+    cliente.ativo = True
+    db.session.commit()
+    return jsonify({'ok': True, 'ativo': cliente.ativo})
 
 
 # ──────────────────────────────────────────────
@@ -902,6 +1253,47 @@ def limpar_expirados_contato_seguro():
         c.status = 'expirado'
     db.session.commit()
     return jsonify({'ok': True, 'marcados_como_expirados': len(pendentes)})
+
+
+@app.route('/api/escritorio/contato-seguro/<int:contato_id>', methods=['DELETE'])
+@login_escritorio_obrigatorio
+def excluir_contato_seguro(contato_id):
+    contato = ContatoSeguro.query.filter_by(id=contato_id, escritorio_id=request.escritorio.id).first()
+    if not contato:
+        return jsonify({'erro': 'Contato seguro não encontrado.'}), 404
+    try:
+        _excluir_contatos_seguros_em_lote([contato.id])
+        db.session.commit()
+    except SQLAlchemyError as erro:
+        db.session.rollback()
+        app.logger.exception('Falha ao excluir contato seguro %s: %s', contato_id, erro)
+        return jsonify({'erro': 'Não foi possível excluir este Contato Seguro.'}), 500
+    return jsonify({'ok': True})
+
+
+@app.route('/api/escritorio/contato-seguro/excluir-lote', methods=['POST'])
+@login_escritorio_obrigatorio
+def excluir_contato_seguro_lote():
+    data = request.get_json() or {}
+    ids = data.get('ids') or []
+    if not isinstance(ids, list) or not ids:
+        return jsonify({'erro': 'Selecione ao menos um registro para excluir.'}), 400
+
+    ids_do_escritorio = [
+        c.id for c in ContatoSeguro.query.filter(
+            ContatoSeguro.id.in_(ids), ContatoSeguro.escritorio_id == request.escritorio.id
+        ).all()
+    ]
+    if not ids_do_escritorio:
+        return jsonify({'erro': 'Nenhum dos registros selecionados foi encontrado.'}), 404
+    try:
+        _excluir_contatos_seguros_em_lote(ids_do_escritorio)
+        db.session.commit()
+    except SQLAlchemyError as erro:
+        db.session.rollback()
+        app.logger.exception('Falha ao excluir contatos seguros em lote: %s', erro)
+        return jsonify({'erro': 'Não foi possível excluir os registros selecionados.'}), 500
+    return jsonify({'ok': True, 'excluidos': len(ids_do_escritorio)})
 
 
 # ──────────────────────────────────────────────
@@ -1866,6 +2258,11 @@ def pagina_escritorio_processos():
     return render_template('processos.html', active='processos')
 
 
+@app.route('/escritorio/clientes')
+def pagina_escritorio_clientes():
+    return render_template('clientes.html', active='clientes')
+
+
 @app.route('/escritorio/tentativas')
 def pagina_escritorio_tentativas():
     return render_template('tentativas.html', active='tentativas')
@@ -1939,6 +2336,7 @@ def api_status():
 
 with app.app_context():
     db.create_all()
+    _garantir_colunas_novas()
     print('[MIGRACAO] OK!')
 
 if __name__ == '__main__':

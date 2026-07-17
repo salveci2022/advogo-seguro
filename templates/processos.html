@@ -124,7 +124,8 @@
 <div class="modal-overlay" id="modalExcluirProcesso">
   <div class="modal-box">
     <h3>Excluir processo?</h3>
-    <p style="color:var(--texto-suave);">Esta ação não pode ser desfeita e removerá também as tentativas suspeitas registradas neste processo.</p>
+    <p style="color:var(--texto-suave);">Esta ação não pode ser desfeita. Serão apagados também:</p>
+    <ul id="resumoExclusaoProcesso" style="color:var(--texto-suave); font-size:0.9rem; line-height:1.8;"></ul>
     <div id="alertaExcluirProcesso" class="alert-box"></div>
     <div class="modal-actions">
       <button type="button" class="btn-spy btn-spy-ghost btn-spy-block" onclick="document.getElementById('modalExcluirProcesso').classList.remove('show')">Cancelar</button>
@@ -305,10 +306,22 @@ document.getElementById('formEditarProcesso').addEventListener('submit', async (
 });
 
 let processoExcluindoId = null;
-function abrirModalExcluirProcesso(id) {
+async function abrirModalExcluirProcesso(id) {
   processoExcluindoId = id;
   hideAlert('alertaExcluirProcesso');
+  document.getElementById('resumoExclusaoProcesso').innerHTML = '<li>Carregando resumo...</li>';
   document.getElementById('modalExcluirProcesso').classList.add('show');
+  try {
+    const resumo = await apiRequest('/api/escritorio/processos/' + id + '/resumo-exclusao');
+    document.getElementById('resumoExclusaoProcesso').innerHTML = `
+      <li><b>${resumo.tentativas_suspeitas}</b> tentativa(s) suspeita(s)</li>
+      <li><b>${resumo.contatos_seguros}</b> contato(s) seguro(s) (CCA)</li>
+      <li><b>${resumo.acessos_publicos}</b> acesso(s) ao link público registrado(s)</li>
+    `;
+  } catch (err) {
+    document.getElementById('resumoExclusaoProcesso').innerHTML = '';
+    showAlert('alertaExcluirProcesso', err.message, 'erro');
+  }
 }
 
 document.getElementById('btnConfirmarExcluirProcesso').addEventListener('click', async () => {

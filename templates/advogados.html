@@ -31,10 +31,10 @@
       <div class="table-wrap">
         <table class="spy-table" id="tabelaAdvogados">
           <thead>
-            <tr><th>Foto</th><th>Nome</th><th>OAB</th><th>Telefone oficial</th><th>Ações</th></tr>
+            <tr><th>Foto</th><th>Nome</th><th>OAB</th><th>Telefone oficial</th><th>Status</th><th>Ações</th></tr>
           </thead>
           <tbody id="corpoTabelaAdvogados">
-            <tr><td colspan="5" class="empty-state">Carregando...</td></tr>
+            <tr><td colspan="6" class="empty-state">Carregando...</td></tr>
           </tbody>
         </table>
       </div>
@@ -81,15 +81,33 @@
   </div>
 </div>
 
-<!-- Modal confirmação de exclusão -->
+<!-- Modal desativar/reativar -->
+<div class="modal-overlay" id="modalDesativarAdvogado">
+  <div class="modal-box">
+    <h3 id="tituloDesativarAdvogado">Desativar advogado?</h3>
+    <p style="color:var(--texto-suave);" id="textoDesativarAdvogado">O advogado deixará de aparecer como ativo, mas todo o histórico é preservado.</p>
+    <div id="alertaDesativarAdvogado" class="alert-box"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn-spy btn-spy-ghost btn-spy-block" onclick="document.getElementById('modalDesativarAdvogado').classList.remove('show')">Cancelar</button>
+      <button type="button" class="btn-spy btn-spy-primary btn-spy-block" id="btnConfirmarDesativarAdvogado">Confirmar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal confirmação de exclusão definitiva -->
 <div class="modal-overlay" id="modalExcluirAdvogado">
   <div class="modal-box">
-    <h3>Excluir advogado?</h3>
-    <p style="color:var(--texto-suave);">Esta ação não pode ser desfeita. Advogados com processos vinculados não podem ser excluídos.</p>
+    <h3>Excluir advogado definitivamente?</h3>
+    <p style="color:var(--texto-suave);">Esta ação não pode ser desfeita. Serão apagados também todos os registros vinculados a este advogado:</p>
+    <ul id="resumoExclusaoAdvogado" style="color:var(--texto-suave); font-size:0.9rem; line-height:1.8;"></ul>
     <div id="alertaExcluir" class="alert-box"></div>
+    <div class="form-group">
+      <label>Digite <b>EXCLUIR</b> para confirmar</label>
+      <input type="text" class="form-control" id="confirmacaoExcluirAdvogado" placeholder="EXCLUIR" autocomplete="off">
+    </div>
     <div class="modal-actions">
       <button type="button" class="btn-spy btn-spy-ghost btn-spy-block" onclick="document.getElementById('modalExcluirAdvogado').classList.remove('show')">Cancelar</button>
-      <button type="button" class="btn-spy btn-spy-danger btn-spy-block" id="btnConfirmarExcluir">Excluir</button>
+      <button type="button" class="btn-spy btn-spy-danger btn-spy-block" id="btnConfirmarExcluir">Excluir definitivamente</button>
     </div>
   </div>
 </div>
@@ -154,13 +172,61 @@ function fecharModalNovo() {
   advogadoEditandoId = null;
 }
 
-function abrirModalExcluir(id) {
+async function abrirModalExcluir(id) {
   advogadoExcluindoId = id;
   hideAlert('alertaExcluir');
+  document.getElementById('confirmacaoExcluirAdvogado').value = '';
+  document.getElementById('resumoExclusaoAdvogado').innerHTML = '<li>Carregando resumo...</li>';
   document.getElementById('modalExcluirAdvogado').classList.add('show');
+  try {
+    const resumo = await apiRequest('/api/escritorio/advogados/' + id + '/resumo-exclusao');
+    document.getElementById('resumoExclusaoAdvogado').innerHTML = `
+      <li><b>${resumo.processos}</b> processo(s)</li>
+      <li><b>${resumo.tentativas_suspeitas}</b> tentativa(s) suspeita(s)</li>
+      <li><b>${resumo.contatos_seguros}</b> contato(s) seguro(s) (CCA)</li>
+    `;
+  } catch (err) {
+    document.getElementById('resumoExclusaoAdvogado').innerHTML = '';
+    showAlert('alertaExcluir', err.message, 'erro');
+  }
 }
 
+let advogadoStatusAlvoId = null;
+let advogadoStatusAcao = 'desativar';
+
+function abrirModalDesativar(id, vaiDesativar) {
+  advogadoStatusAlvoId = id;
+  advogadoStatusAcao = vaiDesativar ? 'desativar' : 'reativar';
+  hideAlert('alertaDesativarAdvogado');
+  document.getElementById('tituloDesativarAdvogado').textContent = vaiDesativar ? 'Desativar advogado?' : 'Reativar advogado?';
+  document.getElementById('textoDesativarAdvogado').textContent = vaiDesativar
+    ? 'O advogado deixará de aparecer como ativo, mas todo o histórico é preservado.'
+    : 'O advogado voltará a aparecer como ativo.';
+  document.getElementById('modalDesativarAdvogado').classList.add('show');
+}
+
+document.getElementById('btnConfirmarDesativarAdvogado').addEventListener('click', async () => {
+  hideAlert('alertaDesativarAdvogado');
+  const btn = document.getElementById('btnConfirmarDesativarAdvogado');
+  setLoading(btn, true, 'Confirmar', 'Aguarde...');
+  try {
+    await apiRequest('/api/escritorio/advogados/' + advogadoStatusAlvoId + '/' + advogadoStatusAcao, { method: 'POST' });
+    document.getElementById('modalDesativarAdvogado').classList.remove('show');
+    carregarAdvogados();
+  } catch (err) {
+    showAlert('alertaDesativarAdvogado', err.message, 'erro');
+  } finally {
+    setLoading(btn, false, 'Confirmar');
+  }
+});
+
 let listaAdvogadosCache = [];
+
+function badgeAtivoAdvogado(ativo) {
+  return ativo
+    ? '<span class="badge-pill badge-verde">Ativo</span>'
+    : '<span class="badge-pill badge-cinza">Inativo</span>';
+}
 
 async function carregarAdvogados() {
   const corpo = document.getElementById('corpoTabelaAdvogados');
@@ -168,7 +234,7 @@ async function carregarAdvogados() {
     const lista = await apiRequest('/api/escritorio/advogados');
     listaAdvogadosCache = lista;
     if (lista.length === 0) {
-      corpo.innerHTML = '<tr><td colspan="5"><div class="empty-state"><div class="ic">⚖️</div>Nenhum advogado cadastrado ainda.</div></td></tr>';
+      corpo.innerHTML = '<tr><td colspan="6"><div class="empty-state"><div class="ic">⚖️</div>Nenhum advogado cadastrado ainda.</div></td></tr>';
       return;
     }
     corpo.innerHTML = lista.map(a => `
@@ -177,8 +243,12 @@ async function carregarAdvogados() {
         <td><strong>${escapeHtml(a.nome)}</strong></td>
         <td>${a.oab ? escapeHtml(a.oab) : '<span class="badge-pill badge-cinza">Não informado</span>'}</td>
         <td>${escapeHtml(a.telefone_oficial)}</td>
+        <td>${badgeAtivoAdvogado(a.ativo)}</td>
         <td style="white-space:nowrap;">
           <button class="btn-spy btn-spy-ghost" style="padding:6px 12px; font-size:0.82rem;" onclick='abrirModalEditar(${JSON.stringify(a)})'>✏️ Editar</button>
+          ${a.ativo
+            ? `<button class="btn-spy btn-spy-ghost" style="padding:6px 12px; font-size:0.82rem;" onclick="abrirModalDesativar(${a.id}, true)">🚫 Desativar</button>`
+            : `<button class="btn-spy btn-spy-ghost" style="padding:6px 12px; font-size:0.82rem;" onclick="abrirModalDesativar(${a.id}, false)">✅ Reativar</button>`}
           <button class="btn-spy btn-spy-ghost" style="padding:6px 12px; font-size:0.82rem; color:var(--vermelho);" onclick="abrirModalExcluir(${a.id})">🗑️</button>
         </td>
       </tr>
@@ -240,16 +310,21 @@ document.getElementById('formAdvogado').addEventListener('submit', async (e) => 
 
 document.getElementById('btnConfirmarExcluir').addEventListener('click', async () => {
   hideAlert('alertaExcluir');
+  const confirmacao = document.getElementById('confirmacaoExcluirAdvogado').value.trim().toUpperCase();
+  if (confirmacao !== 'EXCLUIR') {
+    showAlert('alertaExcluir', 'Digite EXCLUIR para confirmar.', 'erro');
+    return;
+  }
   const btn = document.getElementById('btnConfirmarExcluir');
-  setLoading(btn, true, 'Excluir', 'Excluindo...');
+  setLoading(btn, true, 'Excluir definitivamente', 'Excluindo...');
   try {
-    await apiRequest('/api/escritorio/advogados/' + advogadoExcluindoId, { method: 'DELETE' });
+    await apiRequest('/api/escritorio/advogados/' + advogadoExcluindoId, { method: 'DELETE', body: { confirmacao: 'EXCLUIR' } });
     document.getElementById('modalExcluirAdvogado').classList.remove('show');
     carregarAdvogados();
   } catch (err) {
     showAlert('alertaExcluir', err.message, 'erro');
   } finally {
-    setLoading(btn, false, 'Excluir');
+    setLoading(btn, false, 'Excluir definitivamente');
   }
 });
 

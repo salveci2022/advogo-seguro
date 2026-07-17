@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/logo-icone.svg') }}">
+<title>Clientes — ADVOGO SEGURO</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+<div class="mobile-topbar">
+  <button onclick="toggleSidebar()">☰</button>
+  <div class="brand" style="font-size:1rem;"><img src="{{ url_for('static', filename='img/logo-icone.svg') }}" class="brand-logo" alt="ADVOGO SEGURO"> ADVOGO SEGURO</div>
+  <div></div>
+</div>
+
+<div class="app-shell">
+  {% include '_sidebar.html' with context %}
+
+  <main class="main-content">
+    <div class="topbar">
+      <h1>Clientes</h1>
+    </div>
+
+    <div id="alertaClientes" class="alert-box"></div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Clientes cadastrados</h2>
+        <span class="helper-text">Clientes são criados automaticamente ao cadastrar um processo. Aqui você edita, desativa ou exclui definitivamente.</span>
+      </div>
+      <div class="table-wrap">
+        <table class="spy-table" id="tabelaClientes">
+          <thead>
+            <tr><th>Nome</th><th>Telefone</th><th>E-mail</th><th>Processos</th><th>Status</th><th>Ações</th></tr>
+          </thead>
+          <tbody id="corpoTabelaClientes">
+            <tr><td colspan="6" class="empty-state">Carregando...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- Modal edição -->
+<div class="modal-overlay" id="modalEditarCliente">
+  <div class="modal-box">
+    <h3>Editar cliente</h3>
+    <div id="alertaEditarCliente" class="alert-box"></div>
+    <form id="formEditarCliente">
+      <input type="hidden" id="editClienteId">
+      <div class="form-group">
+        <label>Nome</label>
+        <input type="text" class="form-control" id="editClienteNome" required>
+      </div>
+      <div class="form-group">
+        <label>Telefone</label>
+        <input type="text" class="form-control" id="editClienteTelefone" required>
+      </div>
+      <div class="form-group">
+        <label>E-mail</label>
+        <input type="email" class="form-control" id="editClienteEmail">
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn-spy btn-spy-ghost btn-spy-block" onclick="document.getElementById('modalEditarCliente').classList.remove('show')">Cancelar</button>
+        <button type="submit" class="btn-spy btn-spy-primary btn-spy-block" id="btnSalvarEdicaoCliente">Salvar alterações</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Modal desativar -->
+<div class="modal-overlay" id="modalDesativarCliente">
+  <div class="modal-box">
+    <h3 id="tituloDesativarCliente">Desativar cliente?</h3>
+    <p style="color:var(--texto-suave);" id="textoDesativarCliente">O cliente deixará de aparecer como ativo, mas todo o histórico é preservado.</p>
+    <div id="alertaDesativarCliente" class="alert-box"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn-spy btn-spy-ghost btn-spy-block" onclick="document.getElementById('modalDesativarCliente').classList.remove('show')">Cancelar</button>
+      <button type="button" class="btn-spy btn-spy-primary btn-spy-block" id="btnConfirmarDesativarCliente">Confirmar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal exclusão definitiva -->
+<div class="modal-overlay" id="modalExcluirCliente">
+  <div class="modal-box">
+    <h3>Excluir cliente definitivamente?</h3>
+    <p style="color:var(--texto-suave);">Esta ação não pode ser desfeita. Serão apagados também todos os registros vinculados a este cliente neste escritório:</p>
+    <ul id="resumoExclusaoCliente" style="color:var(--texto-suave); font-size:0.9rem; line-height:1.8;"></ul>
+    <div id="alertaExcluirCliente" class="alert-box"></div>
+    <div class="form-group">
+      <label>Digite <b>EXCLUIR</b> para confirmar</label>
+      <input type="text" class="form-control" id="confirmacaoExcluirCliente" placeholder="EXCLUIR" autocomplete="off">
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn-spy btn-spy-ghost btn-spy-block" onclick="document.getElementById('modalExcluirCliente').classList.remove('show')">Cancelar</button>
+      <button type="button" class="btn-spy btn-spy-danger btn-spy-block" id="btnConfirmarExcluirCliente">Excluir definitivamente</button>
+    </div>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/api.js') }}"></script>
+<script>
+Auth.requireTipo('escritorio', '/escritorio/login');
+
+let listaClientesCache = [];
+let clienteAlvoId = null;
+let clienteDesativarAcao = 'desativar';
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str || '';
+  return div.innerHTML;
+}
+
+function badgeAtivoCliente(ativo) {
+  return ativo
+    ? '<span class="badge-pill badge-verde">Ativo</span>'
+    : '<span class="badge-pill badge-cinza">Inativo</span>';
+}
+
+async function carregarClientes() {
+  const corpo = document.getElementById('corpoTabelaClientes');
+  try {
+    const lista = await apiRequest('/api/escritorio/clientes');
+    listaClientesCache = lista;
+    if (lista.length === 0) {
+      corpo.innerHTML = '<tr><td colspan="6"><div class="empty-state"><div class="ic">🧑‍💼</div>Nenhum cliente cadastrado ainda.</div></td></tr>';
+      return;
+    }
+    corpo.innerHTML = lista.map(c => `
+      <tr>
+        <td><strong>${escapeHtml(c.nome)}</strong></td>
+        <td>${escapeHtml(c.telefone)}</td>
+        <td>${c.email ? escapeHtml(c.email) : '—'}</td>
+        <td>${c.processos_count}</td>
+        <td>${badgeAtivoCliente(c.ativo)}</td>
+        <td style="white-space:nowrap;">
+          <button class="btn-spy btn-spy-ghost" style="padding:6px 10px; font-size:0.8rem;" onclick="abrirModalEditarCliente(${c.id})">✏️ Editar</button>
+          ${c.ativo
+            ? `<button class="btn-spy btn-spy-ghost" style="padding:6px 10px; font-size:0.8rem;" onclick="abrirModalDesativarCliente(${c.id}, true)">🚫 Desativar</button>`
+            : `<button class="btn-spy btn-spy-ghost" style="padding:6px 10px; font-size:0.8rem;" onclick="abrirModalDesativarCliente(${c.id}, false)">✅ Reativar</button>`}
+          <button class="btn-spy btn-spy-ghost" style="padding:6px 10px; font-size:0.8rem; color:var(--vermelho);" onclick="abrirModalExcluirCliente(${c.id})">🗑️ Excluir</button>
+        </td>
+      </tr>
+    `).join('');
+  } catch (err) {
+    showAlert('alertaClientes', err.message, 'erro');
+  }
+}
+
+function abrirModalEditarCliente(id) {
+  const c = listaClientesCache.find(x => x.id === id);
+  if (!c) return;
+  hideAlert('alertaEditarCliente');
+  document.getElementById('editClienteId').value = c.id;
+  document.getElementById('editClienteNome').value = c.nome || '';
+  document.getElementById('editClienteTelefone').value = c.telefone || '';
+  document.getElementById('editClienteEmail').value = c.email || '';
+  document.getElementById('modalEditarCliente').classList.add('show');
+}
+
+document.getElementById('formEditarCliente').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  hideAlert('alertaEditarCliente');
+  const btn = document.getElementById('btnSalvarEdicaoCliente');
+  setLoading(btn, true, 'Salvar alterações', 'Salvando...');
+  try {
+    const id = document.getElementById('editClienteId').value;
+    await apiRequest('/api/escritorio/clientes/' + id, {
+      method: 'PUT',
+      body: {
+        nome: document.getElementById('editClienteNome').value.trim(),
+        telefone: document.getElementById('editClienteTelefone').value.trim(),
+        email: document.getElementById('editClienteEmail').value.trim()
+      }
+    });
+    document.getElementById('modalEditarCliente').classList.remove('show');
+    carregarClientes();
+  } catch (err) {
+    showAlert('alertaEditarCliente', err.message, 'erro');
+  } finally {
+    setLoading(btn, false, 'Salvar alterações');
+  }
+});
+
+function abrirModalDesativarCliente(id, vaiDesativar) {
+  clienteAlvoId = id;
+  clienteDesativarAcao = vaiDesativar ? 'desativar' : 'reativar';
+  hideAlert('alertaDesativarCliente');
+  document.getElementById('tituloDesativarCliente').textContent = vaiDesativar ? 'Desativar cliente?' : 'Reativar cliente?';
+  document.getElementById('textoDesativarCliente').textContent = vaiDesativar
+    ? 'O cliente deixará de aparecer como ativo, mas todo o histórico é preservado.'
+    : 'O cliente voltará a aparecer como ativo.';
+  document.getElementById('modalDesativarCliente').classList.add('show');
+}
+
+document.getElementById('btnConfirmarDesativarCliente').addEventListener('click', async () => {
+  hideAlert('alertaDesativarCliente');
+  const btn = document.getElementById('btnConfirmarDesativarCliente');
+  setLoading(btn, true, 'Confirmar', 'Aguarde...');
+  try {
+    await apiRequest('/api/escritorio/clientes/' + clienteAlvoId + '/' + clienteDesativarAcao, { method: 'POST' });
+    document.getElementById('modalDesativarCliente').classList.remove('show');
+    carregarClientes();
+  } catch (err) {
+    showAlert('alertaDesativarCliente', err.message, 'erro');
+  } finally {
+    setLoading(btn, false, 'Confirmar');
+  }
+});
+
+async function abrirModalExcluirCliente(id) {
+  clienteAlvoId = id;
+  hideAlert('alertaExcluirCliente');
+  document.getElementById('confirmacaoExcluirCliente').value = '';
+  document.getElementById('resumoExclusaoCliente').innerHTML = '<li>Carregando resumo...</li>';
+  document.getElementById('modalExcluirCliente').classList.add('show');
+  try {
+    const resumo = await apiRequest('/api/escritorio/clientes/' + id + '/resumo-exclusao');
+    const itens = [
+      `<li><b>${resumo.processos}</b> processo(s)</li>`,
+      `<li><b>${resumo.tentativas_suspeitas}</b> tentativa(s) suspeita(s)</li>`,
+      `<li><b>${resumo.contatos_seguros}</b> contato(s) seguro(s) (CCA)</li>`
+    ];
+    if (resumo.compartilhado_com_outro_escritorio) {
+      itens.push('<li>⚠️ Este cliente também está vinculado a outro escritório — o cadastro dele será preservado, apenas os dados deste escritório serão apagados.</li>');
+    }
+    document.getElementById('resumoExclusaoCliente').innerHTML = itens.join('');
+  } catch (err) {
+    document.getElementById('resumoExclusaoCliente').innerHTML = '';
+    showAlert('alertaExcluirCliente', err.message, 'erro');
+  }
+}
+
+document.getElementById('btnConfirmarExcluirCliente').addEventListener('click', async () => {
+  hideAlert('alertaExcluirCliente');
+  const confirmacao = document.getElementById('confirmacaoExcluirCliente').value.trim().toUpperCase();
+  if (confirmacao !== 'EXCLUIR') {
+    showAlert('alertaExcluirCliente', 'Digite EXCLUIR para confirmar.', 'erro');
+    return;
+  }
+  const btn = document.getElementById('btnConfirmarExcluirCliente');
+  setLoading(btn, true, 'Excluir definitivamente', 'Excluindo...');
+  try {
+    const data = await apiRequest('/api/escritorio/clientes/' + clienteAlvoId, {
+      method: 'DELETE',
+      body: { confirmacao: 'EXCLUIR' }
+    });
+    document.getElementById('modalExcluirCliente').classList.remove('show');
+    showAlert('alertaClientes', data.mensagem, 'sucesso');
+    carregarClientes();
+  } catch (err) {
+    showAlert('alertaExcluirCliente', err.message, 'erro');
+  } finally {
+    setLoading(btn, false, 'Excluir definitivamente');
+  }
+});
+
+carregarClientes();
+</script>
+</body>
+</html>

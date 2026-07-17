@@ -21,6 +21,7 @@
   <main class="main-content">
     <div class="topbar">
       <h1>Tentativas Suspeitas</h1>
+      <button class="btn-spy btn-spy-danger" id="btnExcluirSelecionadas" style="display:none;" onclick="abrirModalExcluirSelecionadas()">🗑️ Excluir selecionadas</button>
     </div>
 
     <div id="alertaTentativas" class="alert-box"></div>
@@ -33,10 +34,10 @@
       <div class="table-wrap">
         <table class="spy-table" id="tabelaTentativas">
           <thead>
-            <tr><th>Data</th><th>Número suspeito</th><th>Canal</th><th>Cliente</th><th>Processo</th><th>Descrição</th><th>Golpe confirmado</th><th>PDF</th></tr>
+            <tr><th><input type="checkbox" id="checkTodasTentativas" onchange="alternarTodasTentativas(this)"></th><th>Data</th><th>Número suspeito</th><th>Canal</th><th>Cliente</th><th>Processo</th><th>Descrição</th><th>Golpe confirmado</th><th>PDF</th><th>Excluir</th></tr>
           </thead>
           <tbody id="corpoTabelaTentativas">
-            <tr><td colspan="8" class="empty-state">Carregando...</td></tr>
+            <tr><td colspan="10" class="empty-state">Carregando...</td></tr>
           </tbody>
         </table>
       </div>
@@ -44,9 +45,25 @@
   </main>
 </div>
 
+<!-- Modal exclusão -->
+<div class="modal-overlay" id="modalExcluirTentativa">
+  <div class="modal-box">
+    <h3 id="tituloExcluirTentativa">Excluir tentativa suspeita?</h3>
+    <p style="color:var(--texto-suave);">Esta ação não pode ser desfeita.</p>
+    <div id="alertaExcluirTentativa" class="alert-box"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn-spy btn-spy-ghost btn-spy-block" onclick="document.getElementById('modalExcluirTentativa').classList.remove('show')">Cancelar</button>
+      <button type="button" class="btn-spy btn-spy-danger btn-spy-block" id="btnConfirmarExcluirTentativa">Excluir</button>
+    </div>
+  </div>
+</div>
+
 <script src="{{ url_for('static', filename='js/api.js') }}"></script>
 <script>
 Auth.requireTipo('escritorio', '/escritorio/login');
+
+let tentativaExcluindoId = null;
+let excluindoSelecionadas = false;
 
 function escapeHtml(str) {
   const div = document.createElement('div');
@@ -64,11 +81,13 @@ async function carregarTentativas() {
   try {
     const lista = await apiRequest('/api/escritorio/tentativas');
     if (lista.length === 0) {
-      corpo.innerHTML = '<tr><td colspan="8"><div class="empty-state"><div class="ic">🚨</div>Nenhuma tentativa suspeita registrada até agora. Ótimo sinal!</div></td></tr>';
+      corpo.innerHTML = '<tr><td colspan="10"><div class="empty-state"><div class="ic">🚨</div>Nenhuma tentativa suspeita registrada até agora. Ótimo sinal!</div></td></tr>';
+      atualizarBotaoExcluirSelecionadas();
       return;
     }
     corpo.innerHTML = lista.map(t => `
       <tr>
+        <td><input type="checkbox" class="check-tentativa" value="${t.id}" onchange="atualizarBotaoExcluirSelecionadas()"></td>
         <td>${escapeHtml(t.criado_em)}</td>
         <td><strong>${escapeHtml(t.numero_suspeito || '—')}</strong></td>
         <td>${canalLabel(t.canal)}</td>
@@ -77,8 +96,10 @@ async function carregarTentativas() {
         <td style="max-width:260px;">${escapeHtml(t.descricao || '—')}</td>
         <td>${t.confirmado_golpe ? '<span class="badge-pill badge-vermelho">⚠ Sim</span>' : '<span class="badge-pill badge-amarelo">Em análise</span>'}</td>
         <td><button class="btn-spy btn-spy-ghost" style="padding:6px 10px; font-size:0.78rem;" onclick="gerarPdfTentativa(${t.id})">📄</button></td>
+        <td><button class="btn-spy btn-spy-ghost" style="padding:6px 10px; font-size:0.78rem; color:var(--vermelho);" onclick="abrirModalExcluirTentativa(${t.id})">🗑️</button></td>
       </tr>
     `).join('');
+    atualizarBotaoExcluirSelecionadas();
   } catch (err) {
     showAlert('alertaTentativas', err.message, 'erro');
   }
@@ -96,6 +117,57 @@ async function gerarPdfTentativa(id) {
     showAlert('alertaTentativas', err.message, 'erro');
   }
 }
+
+function alternarTodasTentativas(checkbox) {
+  document.querySelectorAll('.check-tentativa').forEach(c => { c.checked = checkbox.checked; });
+  atualizarBotaoExcluirSelecionadas();
+}
+
+function tentativasSelecionadas() {
+  return Array.from(document.querySelectorAll('.check-tentativa:checked')).map(c => parseInt(c.value, 10));
+}
+
+function atualizarBotaoExcluirSelecionadas() {
+  const btn = document.getElementById('btnExcluirSelecionadas');
+  const qtd = tentativasSelecionadas().length;
+  btn.style.display = qtd > 0 ? 'inline-flex' : 'none';
+  btn.textContent = `🗑️ Excluir selecionadas (${qtd})`;
+}
+
+function abrirModalExcluirTentativa(id) {
+  tentativaExcluindoId = id;
+  excluindoSelecionadas = false;
+  hideAlert('alertaExcluirTentativa');
+  document.getElementById('tituloExcluirTentativa').textContent = 'Excluir tentativa suspeita?';
+  document.getElementById('modalExcluirTentativa').classList.add('show');
+}
+
+function abrirModalExcluirSelecionadas() {
+  excluindoSelecionadas = true;
+  hideAlert('alertaExcluirTentativa');
+  const qtd = tentativasSelecionadas().length;
+  document.getElementById('tituloExcluirTentativa').textContent = `Excluir ${qtd} tentativa(s) suspeita(s)?`;
+  document.getElementById('modalExcluirTentativa').classList.add('show');
+}
+
+document.getElementById('btnConfirmarExcluirTentativa').addEventListener('click', async () => {
+  hideAlert('alertaExcluirTentativa');
+  const btn = document.getElementById('btnConfirmarExcluirTentativa');
+  setLoading(btn, true, 'Excluir', 'Excluindo...');
+  try {
+    if (excluindoSelecionadas) {
+      await apiRequest('/api/escritorio/tentativas/excluir-lote', { method: 'POST', body: { ids: tentativasSelecionadas() } });
+    } else {
+      await apiRequest('/api/escritorio/tentativas/' + tentativaExcluindoId, { method: 'DELETE' });
+    }
+    document.getElementById('modalExcluirTentativa').classList.remove('show');
+    carregarTentativas();
+  } catch (err) {
+    showAlert('alertaExcluirTentativa', err.message, 'erro');
+  } finally {
+    setLoading(btn, false, 'Excluir');
+  }
+});
 
 carregarTentativas();
 </script>
