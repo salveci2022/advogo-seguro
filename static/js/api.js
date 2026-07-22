@@ -2,7 +2,7 @@
    ADVOGO SEGURO — Camada de integração com a API Flask
    ============================================================ */
 
-const API_BASE = ''; // mesma origem (Flask serve front e API)
+const API_BASE = window.location.origin; // usa automaticamente o domínio local ou do Render
 
 const Auth = {
   TOKEN_KEY: 'advogo_seguro_token',
@@ -50,15 +50,40 @@ async function apiRequest(path, options = {}) {
     if (token) headers['Authorization'] = 'Bearer ' + token;
   }
 
-  let response;
-  try {
-    response = await fetch(API_BASE + path, {
+  const url = new URL(path, API_BASE).toString();
+
+  async function executarFetch() {
+    return fetch(url, {
       method,
       headers,
+      credentials: 'same-origin',
+      cache: 'no-store',
       body: body ? JSON.stringify(body) : undefined
     });
-  } catch (networkErr) {
-    throw new Error('Não foi possível conectar ao servidor. Verifique sua internet e tente novamente.');
+  }
+
+  let response;
+  try {
+    response = await executarFetch();
+  } catch (primeiroErro) {
+    // Uma segunda tentativa curta ajuda quando o serviço do Render está
+    // iniciando ou sofreu uma interrupção momentânea.
+    await new Promise(resolve => setTimeout(resolve, 1500));
+
+    try {
+      response = await executarFetch();
+    } catch (segundoErro) {
+      console.error('Falha de conexão com a API:', {
+        url,
+        primeiroErro,
+        segundoErro
+      });
+
+      throw new Error(
+        'O servidor está temporariamente indisponível. ' +
+        'Aguarde alguns segundos, atualize a página e tente novamente.'
+      );
+    }
   }
 
   let data = null;
