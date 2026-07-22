@@ -68,8 +68,23 @@
 <script>
 Auth.requireTipo('escritorio', '/escritorio/login');
 document.getElementById('campoNome').value = Auth.getNome();
-const nomesPlano = { trial: 'Teste grátis', pro: 'PRO', enterprise: 'Enterprise', cancelado: 'Cancelado' };
-document.getElementById('campoPlano').value = nomesPlano[Auth.getPlano()] || Auth.getPlano() || '—';
+const nomesPlano = {
+  trial: 'Teste grátis',
+  profissional: 'Proteção Profissional',
+  escritorio: 'Escritório Protegido',
+  blindagem: 'Blindagem Jurídica',
+  corporativo: 'Corporativo',
+
+  // Compatibilidade com os códigos antigos do sistema
+  pro: 'Escritório Protegido',
+  enterprise: 'Corporativo',
+
+  cancelado: 'Cancelado'
+};
+
+const planoAtual = Auth.getPlano();
+document.getElementById('campoPlano').value =
+  nomesPlano[planoAtual] || (planoAtual ? String(planoAtual).toUpperCase() : '—');
 
 document.getElementById('formSenha').addEventListener('submit', async (e) => {
   e.preventDefault();

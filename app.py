@@ -75,6 +75,65 @@ HOTMART_WEBHOOK_TOKEN = os.environ.get('HOTMART_WEBHOOK_TOKEN', '')
 RESET_TOKEN_TTL_MINUTOS = 30
 CONTATO_SEGURO_TTL_MINUTOS = int(os.environ.get('CONTATO_SEGURO_TTL_MINUTOS', '10'))
 
+
+# ──────────────────────────────────────────────
+# PLANOS COMERCIAIS
+# ──────────────────────────────────────────────
+# Usa as colunas já existentes em escritorios (plano e plano_expira), portanto
+# esta integração NÃO cria nem remove colunas do banco de dados.
+PLANOS_ADVOGO_SEGURO = {
+    'trial': {
+        'nome': 'Período de Teste',
+        'preco_mensal': 0.00,
+        'implantacao': 0.00,
+        'limite_advogados': 1,
+    },
+    'profissional': {
+        'nome': 'Proteção Profissional',
+        'preco_mensal': 179.00,
+        'implantacao': 297.00,
+        'limite_advogados': 1,
+    },
+    'escritorio': {
+        'nome': 'Escritório Protegido',
+        'preco_mensal': 497.00,
+        'implantacao': 697.00,
+        'limite_advogados': 5,
+    },
+    'blindagem': {
+        'nome': 'Blindagem Jurídica',
+        'preco_mensal': 997.00,
+        'implantacao': 1497.00,
+        'limite_advogados': 20,
+    },
+    'corporativo': {
+        'nome': 'Corporativo',
+        'preco_mensal': 1997.00,
+        'implantacao': None,
+        'limite_advogados': None,
+    },
+}
+
+# Compatibilidade com contas antigas. Não altera automaticamente o valor salvo
+# no banco; apenas aplica a regra equivalente no sistema novo.
+PLANOS_LEGADOS = {
+    'pro': 'escritorio',
+    'enterprise': 'corporativo',
+}
+
+
+def normalizar_codigo_plano(codigo):
+    codigo = (codigo or 'trial').strip().lower()
+    return PLANOS_LEGADOS.get(codigo, codigo)
+
+
+def obter_config_plano(codigo):
+    codigo_normalizado = normalizar_codigo_plano(codigo)
+    return codigo_normalizado, PLANOS_ADVOGO_SEGURO.get(
+        codigo_normalizado,
+        PLANOS_ADVOGO_SEGURO['trial']
+    )
+
 # Upload de foto do advogado (Sprint 3)
 UPLOAD_EXTENSOES_PERMITIDAS = {'jpg', 'jpeg', 'png', 'webp'}
 UPLOAD_TAMANHO_MAXIMO_BYTES = 3 * 1024 * 1024  # 3 MB
@@ -164,11 +223,30 @@ class Escritorio(db.Model):
     processos = db.relationship('Processo', backref='escritorio', lazy=True)
 
     def plano_ativo(self):
-        if self.plano in ('pro', 'enterprise'):
+        codigo_original = (self.plano or 'trial').strip().lower()
+        codigo_normalizado = normalizar_codigo_plano(codigo_original)
+
+        if codigo_normalizado == 'trial':
+            return bool(self.plano_expira and self.plano_expira > datetime.utcnow())
+
+        if codigo_normalizado not in PLANOS_ADVOGO_SEGURO:
+            return False
+
+        # Contas legadas "pro" e "enterprise" continuam ativas para evitar
+        # bloqueio inesperado de clientes já cadastrados.
+        if codigo_original in PLANOS_LEGADOS:
             return True
-        if self.plano == 'trial' and self.plano_expira and self.plano_expira > datetime.utcnow():
-            return True
-        return False
+
+        # Nos planos atuais, data vazia significa contrato sem vencimento
+        # automático. Quando houver data, ela precisa estar no futuro.
+        return self.plano_expira is None or self.plano_expira > datetime.utcnow()
+
+    def config_plano(self):
+        return obter_config_plano(self.plano)
+
+    def limite_advogados(self):
+        _, config = self.config_plano()
+        return config['limite_advogados']
 
 
 class Advogado(db.Model):
@@ -683,16 +761,89 @@ def login_escritorio():
     })
 
 
+@app.route('/api/escritorio/plano', methods=['GET'])
+@login_escritorio_obrigatorio
+def dados_plano_escritorio():
+    codigo, config = request.escritorio.config_plano()
+    ativos = Advogado.query.filter_by(
+        escritorio_id=request.escritorio.id,
+        ativo=True
+    ).count()
+    limite = config['limite_advogados']
+    restante = None if limite is None else max(limite - ativos, 0)
+    plano_ativo = request.escritorio.plano_ativo()
+    pode_adicionar = plano_ativo and (limite is None or ativos < limite)
+
+    if not plano_ativo:
+        mensagem_limite = 'Seu plano está inativo. Regularize o acesso para continuar.'
+    elif limite is not None and ativos >= limite:
+        mensagem_limite = (
+            f'Seu plano {config["nome"]} permite até {limite} advogado(s) ativo(s). '
+            'Para adicionar outro profissional, altere o plano.'
+        )
+    else:
+        mensagem_limite = None
+
+    return jsonify({
+        'codigo': codigo,
+        'codigo_salvo': request.escritorio.plano,
+        'nome': config['nome'],
+        'preco_mensal': config['preco_mensal'],
+        'implantacao': config['implantacao'],
+        'limite_advogados': limite,
+        'advogados_ativos': ativos,
+        'advogados_restantes': restante,
+        'plano_ativo': plano_ativo,
+        'pode_adicionar_advogado': pode_adicionar,
+        'mensagem_limite': mensagem_limite,
+        'expira_em': (
+            request.escritorio.plano_expira.isoformat()
+            if request.escritorio.plano_expira else None
+        ),
+    })
+
+
 @app.route('/api/escritorio/advogados', methods=['GET', 'POST'])
 @login_escritorio_obrigatorio
 def advogados():
     if request.method == 'POST':
+        if not request.escritorio.plano_ativo():
+            return jsonify({
+                'erro': 'Plano inativo. Regularize o acesso para cadastrar advogados.',
+                'limite_plano': True
+            }), 403
+
+        codigo_plano, config_plano = request.escritorio.config_plano()
+        limite = config_plano['limite_advogados']
+        ativos = Advogado.query.filter_by(
+            escritorio_id=request.escritorio.id,
+            ativo=True
+        ).count()
+
+        if limite is not None and ativos >= limite:
+            return jsonify({
+                'erro': (
+                    f'Seu plano {config_plano["nome"]} permite até {limite} '
+                    'advogado(s) ativo(s). Para adicionar outro profissional, '
+                    'acesse a página de planos.'
+                ),
+                'limite_plano': True,
+                'plano': codigo_plano,
+                'limite_advogados': limite,
+                'advogados_ativos': ativos,
+            }), 403
+
         data = request.get_json() or {}
+        nome = data.get('nome', '').strip()
+        telefone = data.get('telefone_oficial', '').strip()
+        if not nome or not telefone:
+            return jsonify({'erro': 'Informe o nome e o telefone oficial do advogado.'}), 400
+
         adv = Advogado(
             escritorio_id=request.escritorio.id,
-            nome=data.get('nome', '').strip(),
+            nome=nome,
             oab=data.get('oab', '').strip(),
-            telefone_oficial=data.get('telefone_oficial', '').strip(),
+            telefone_oficial=telefone,
             foto_url=data.get('foto_url', '')
         )
         db.session.add(adv)
@@ -768,6 +919,26 @@ def reativar_advogado(advogado_id):
     adv = Advogado.query.filter_by(id=advogado_id, escritorio_id=request.escritorio.id).first()
     if not adv:
         return jsonify({'erro': 'Advogado não encontrado'}), 404
+    if adv.ativo:
+        return jsonify({'ok': True, 'ativo': True})
+    if not request.escritorio.plano_ativo():
+        return jsonify({'erro': 'Plano inativo. Regularize o acesso para reativar advogados.'}), 403
+
+    _, config_plano = request.escritorio.config_plano()
+    limite = config_plano['limite_advogados']
+    ativos = Advogado.query.filter_by(
+        escritorio_id=request.escritorio.id,
+        ativo=True
+    ).count()
+    if limite is not None and ativos >= limite:
+        return jsonify({
+            'erro': (
+                f'Seu plano {config_plano["nome"]} permite até {limite} '
+                'advogado(s) ativo(s). Altere o plano antes de reativar.'
+            ),
+            'limite_plano': True
+        }), 403
+
     adv.ativo = True
     db.session.commit()
     return jsonify({'ok': True, 'ativo': adv.ativo})
@@ -2169,6 +2340,52 @@ def webhook_hotmart():
 # ──────────────────────────────────────────────
 # ADMIN
 # ──────────────────────────────────────────────
+
+@app.route('/api/admin/definir-plano/<secret>/<email>/<codigo>', methods=['GET', 'POST'])
+def admin_definir_plano(secret, email, codigo):
+    if secret != ADMIN_SECRET:
+        return jsonify({'erro': 'Não autorizado'}), 403
+
+    codigo = normalizar_codigo_plano(codigo)
+    if codigo not in PLANOS_ADVOGO_SEGURO:
+        return jsonify({
+            'erro': 'Plano inválido.',
+            'planos_validos': list(PLANOS_ADVOGO_SEGURO.keys())
+        }), 400
+
+    escritorio = Escritorio.query.filter_by(email=email.strip().lower()).first()
+    if not escritorio:
+        return jsonify({'erro': f'Escritório {email} não encontrado'}), 404
+
+    dias_texto = request.args.get('dias', '').strip()
+    dias = None
+    if dias_texto:
+        try:
+            dias = int(dias_texto)
+        except ValueError:
+            return jsonify({'erro': 'O parâmetro dias deve ser um número inteiro.'}), 400
+        if dias < 1 or dias > 3650:
+            return jsonify({'erro': 'Use um prazo entre 1 e 3650 dias.'}), 400
+
+    escritorio.plano = codigo
+    if codigo == 'trial':
+        escritorio.plano_expira = datetime.utcnow() + timedelta(days=dias or 7)
+    elif dias:
+        escritorio.plano_expira = datetime.utcnow() + timedelta(days=dias)
+    else:
+        escritorio.plano_expira = None
+    db.session.commit()
+
+    _, config = escritorio.config_plano()
+    return jsonify({
+        'ok': True,
+        'escritorio': escritorio.nome,
+        'email': escritorio.email,
+        'plano': codigo,
+        'nome_plano': config['nome'],
+        'expira_em': escritorio.plano_expira.isoformat() if escritorio.plano_expira else None,
+    })
+
 
 @app.route('/api/admin/ativar-pro/<secret>/<email>')
 def admin_ativar_pro(secret, email):

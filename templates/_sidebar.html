@@ -1,6 +1,6 @@
 <div class="sidebar" id="sidebarEl">
   <div class="brand"><img src="{{ url_for('static', filename='img/logo-icone.svg') }}" class="brand-logo" alt="ADVOGO SEGURO"> ADVOGO SEGURO</div>
-  <div class="plano-tag" id="planoTag">PLANO: —</div>
+  <div class="plano-tag" id="planoTag">PLANO: CARREGANDO...</div>
   <nav>
     <a href="/escritorio/painel" data-path="/escritorio/painel" class="{{ 'active' if active == 'dashboard' else '' }}"><span class="ic">📊</span> Dashboard</a>
     <a href="/escritorio/advogados" data-path="/escritorio/advogados" class="{{ 'active' if active == 'advogados' else '' }}"><span class="ic">⚖️</span> Advogados</a>
@@ -10,8 +10,52 @@
     <a href="/escritorio/contato-seguro" data-path="/escritorio/contato-seguro" class="{{ 'active' if active == 'contato_seguro' else '' }}"><span class="ic">🔐</span> Contato Seguro</a>
     <a href="/escritorio/relatorios" data-path="/escritorio/relatorios" class="{{ 'active' if active == 'relatorios' else '' }}"><span class="ic">📄</span> Relatórios</a>
     <a href="/escritorio/configuracoes" data-path="/escritorio/configuracoes" class="{{ 'active' if active == 'configuracoes' else '' }}"><span class="ic">⚙️</span> Configurações</a>
+    <a href="/static/planos.html" target="_blank" rel="noopener"><span class="ic">💳</span> Ver planos</a>
   </nav>
   <div class="logout-link">
     <a href="#" onclick="Auth.logout(); return false;"><span class="ic">🚪</span> Sair</a>
   </div>
 </div>
+
+
+<script>
+(function () {
+  window.renderizarPlanoSidebar = function (plano) {
+    const tag = document.getElementById('planoTag');
+    if (!tag || !plano) return;
+
+    const uso = plano.limite_advogados === null
+      ? `${plano.advogados_ativos} ativos`
+      : `${plano.advogados_ativos}/${plano.limite_advogados}`;
+
+    tag.textContent = `PLANO: ${plano.nome.toUpperCase()} • ${uso}`;
+    tag.title = plano.plano_ativo
+      ? 'Plano ativo'
+      : 'Plano inativo ou vencido';
+  };
+
+  window.atualizarPlanoSidebar = async function () {
+    const tag = document.getElementById('planoTag');
+    if (!tag || typeof Auth === 'undefined') return;
+
+    const token = Auth.getToken();
+    if (!token) return;
+
+    try {
+      const resposta = await fetch('/api/escritorio/plano?ts=' + Date.now(), {
+        headers: { 'Authorization': 'Bearer ' + token },
+        cache: 'no-store'
+      });
+
+      if (!resposta.ok) return;
+
+      const plano = await resposta.json();
+      window.renderizarPlanoSidebar(plano);
+    } catch (erro) {
+      tag.textContent = 'PLANO: NÃO DISPONÍVEL';
+    }
+  };
+
+  window.addEventListener('DOMContentLoaded', window.atualizarPlanoSidebar);
+})();
+</script>

@@ -21,10 +21,20 @@
   <main class="main-content">
     <div class="topbar">
       <h1>Advogados</h1>
-      <button class="btn-spy btn-spy-primary" onclick="abrirModalNovo()">+ Novo Advogado</button>
+      <button class="btn-spy btn-spy-primary" id="btnNovoAdvogado" onclick="abrirModalNovo()">+ Novo Advogado</button>
     </div>
 
     <div id="alertaAdvogados" class="alert-box"></div>
+
+    <div class="panel" id="painelPlanoAdvogados">
+      <div class="panel-head" style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;">
+        <div>
+          <h2 style="margin-bottom:6px;">Seu plano</h2>
+          <div id="resumoPlanoAdvogados" style="color:var(--texto-suave);">Carregando informações do plano...</div>
+        </div>
+        <a class="btn-spy btn-spy-ghost" href="/static/planos.html" target="_blank" rel="noopener">Ver planos</a>
+      </div>
+    </div>
 
     <div class="panel">
       <div class="panel-head"><h2>Advogados cadastrados</h2></div>
@@ -118,8 +128,46 @@ Auth.requireTipo('escritorio', '/escritorio/login');
 
 let advogadoEditandoId = null;
 let advogadoExcluindoId = null;
+let estadoPlanoAdvogados = null;
+
+async function carregarPlanoAdvogados() {
+  const resumo = document.getElementById('resumoPlanoAdvogados');
+  const botaoNovo = document.getElementById('btnNovoAdvogado');
+  try {
+    const plano = await apiRequest('/api/escritorio/plano');
+    estadoPlanoAdvogados = plano;
+
+    if (typeof window.renderizarPlanoSidebar === 'function') {
+      window.renderizarPlanoSidebar(plano);
+    }
+
+    const limiteTexto = plano.limite_advogados === null
+      ? `${plano.advogados_ativos} advogado(s) ativo(s) • limite conforme contrato`
+      : `${plano.advogados_ativos} de ${plano.limite_advogados} advogado(s) ativo(s)`;
+
+    resumo.innerHTML = `<strong>${escapeHtml(plano.nome)}</strong> — ${limiteTexto}` +
+      (plano.plano_ativo ? '' : ' • <span style="color:var(--vermelho);font-weight:700;">plano inativo</span>');
+
+    botaoNovo.disabled = !plano.pode_adicionar_advogado;
+    botaoNovo.title = plano.pode_adicionar_advogado
+      ? 'Cadastrar novo advogado'
+      : (plano.mensagem_limite || 'Cadastro indisponível no plano atual');
+    botaoNovo.style.opacity = plano.pode_adicionar_advogado ? '1' : '0.55';
+    botaoNovo.style.cursor = plano.pode_adicionar_advogado ? 'pointer' : 'not-allowed';
+  } catch (err) {
+    resumo.textContent = 'Não foi possível carregar as informações do plano.';
+  }
+}
 
 function abrirModalNovo() {
+  if (estadoPlanoAdvogados && !estadoPlanoAdvogados.pode_adicionar_advogado) {
+    showAlert(
+      'alertaAdvogados',
+      estadoPlanoAdvogados.mensagem_limite || 'Seu plano não permite adicionar outro advogado.',
+      'erro'
+    );
+    return;
+  }
   advogadoEditandoId = null;
   document.getElementById('tituloModalAdvogado').textContent = 'Cadastrar advogado';
   document.getElementById('btnSalvarAdvogado').textContent = 'Salvar';
@@ -212,7 +260,7 @@ document.getElementById('btnConfirmarDesativarAdvogado').addEventListener('click
   try {
     await apiRequest('/api/escritorio/advogados/' + advogadoStatusAlvoId + '/' + advogadoStatusAcao, { method: 'POST' });
     document.getElementById('modalDesativarAdvogado').classList.remove('show');
-    carregarAdvogados();
+    await Promise.all([carregarAdvogados(), carregarPlanoAdvogados()]);
   } catch (err) {
     showAlert('alertaDesativarAdvogado', err.message, 'erro');
   } finally {
@@ -300,7 +348,7 @@ document.getElementById('formAdvogado').addEventListener('submit', async (e) => 
     }
 
     fecharModalNovo();
-    carregarAdvogados();
+    await Promise.all([carregarAdvogados(), carregarPlanoAdvogados()]);
   } catch (err) {
     showAlert('alertaModal', err.message, 'erro');
   } finally {
@@ -320,7 +368,7 @@ document.getElementById('btnConfirmarExcluir').addEventListener('click', async (
   try {
     await apiRequest('/api/escritorio/advogados/' + advogadoExcluindoId, { method: 'DELETE', body: { confirmacao: 'EXCLUIR' } });
     document.getElementById('modalExcluirAdvogado').classList.remove('show');
-    carregarAdvogados();
+    await Promise.all([carregarAdvogados(), carregarPlanoAdvogados()]);
   } catch (err) {
     showAlert('alertaExcluir', err.message, 'erro');
   } finally {
@@ -328,7 +376,7 @@ document.getElementById('btnConfirmarExcluir').addEventListener('click', async (
   }
 });
 
-carregarAdvogados();
+Promise.all([carregarPlanoAdvogados(), carregarAdvogados()]);
 </script>
 </body>
 </html>

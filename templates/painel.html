@@ -45,7 +45,7 @@
       <div class="kpi-card accent-verde">
         <div class="kpi-icon">💳</div>
         <div class="kpi-label">Plano atual</div>
-        <div class="kpi-value" id="kpiPlano" style="font-size:1.3rem;">—</div>
+        <div class="kpi-value" id="kpiPlano" style="font-size:1.05rem; line-height:1.25; word-break:break-word;">—</div>
       </div>
     </div>
 
@@ -86,10 +86,31 @@ async function carregarDashboard() {
 function atualizarPlanoTag(plano) {
   const tag = document.getElementById('planoTag');
   const kpi = document.getElementById('kpiPlano');
-  const nomes = { trial: 'TESTE GRÁTIS', pro: 'PRO', enterprise: 'ENTERPRISE', cancelado: 'CANCELADO' };
-  const texto = nomes[plano] || plano || '—';
-  if (tag) tag.textContent = 'PLANO: ' + texto;
-  if (kpi) kpi.textContent = texto;
+
+  const nomes = {
+    trial: 'TESTE GRÁTIS',
+    profissional: 'PROTEÇÃO PROFISSIONAL',
+    escritorio: 'ESCRITÓRIO PROTEGIDO',
+    blindagem: 'BLINDAGEM JURÍDICA',
+    corporativo: 'CORPORATIVO',
+
+    // Compatibilidade com os códigos antigos do sistema
+    pro: 'ESCRITÓRIO PROTEGIDO',
+    enterprise: 'CORPORATIVO',
+
+    cancelado: 'CANCELADO'
+  };
+
+  const texto = nomes[plano] || (plano ? String(plano).toUpperCase() : '—');
+
+  if (tag) {
+    tag.textContent = 'PLANO: ' + texto;
+  }
+
+  if (kpi) {
+    kpi.textContent = texto;
+    kpi.title = texto;
+  }
 }
 
 // Como não há endpoint "/me", buscamos o plano relendo o login não é ideal;

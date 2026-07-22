@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Planos do ADVOGO SEGURO para advogados e escritórios de advocacia.">
+  <title>Planos | ADVOGO SEGURO</title>
+
+  <style>
+    :root {
+      --adv-primary: #123d73;
+      --adv-primary-2: #1f65d6;
+      --adv-dark: #0d2238;
+      --adv-text: #243b53;
+      --adv-muted: #66788a;
+      --adv-bg: #f5f8fc;
+      --adv-card: #ffffff;
+      --adv-border: #dbe5ef;
+      --adv-success: #16875f;
+      --adv-shadow: 0 12px 34px rgba(13, 34, 56, 0.10);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      background: var(--adv-bg);
+      color: var(--adv-text);
+      font-family: Arial, Helvetica, sans-serif;
+    }
+
+    .adv-page {
+      min-height: 100vh;
+    }
+
+    .adv-hero {
+      padding: 68px 20px 52px;
+      background:
+        radial-gradient(circle at top right, rgba(31, 101, 214, 0.22), transparent 34%),
+        linear-gradient(135deg, #0d2238 0%, #123d73 100%);
+      color: #ffffff;
+      text-align: center;
+    }
+
+    .adv-wrap {
+      width: min(1220px, calc(100% - 30px));
+      margin: 0 auto;
+    }
+
+    .adv-brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 24px;
+      font-size: 15px;
+      font-weight: 800;
+      letter-spacing: 1.2px;
+    }
+
+    .adv-brand-badge {
+      display: inline-grid;
+      width: 42px;
+      height: 42px;
+      place-items: center;
+      border: 1px solid rgba(255,255,255,.28);
+      border-radius: 12px;
+      background: rgba(255,255,255,.12);
+      font-size: 21px;
+    }
+
+    .adv-hero h1 {
+      max-width: 900px;
+      margin: 0 auto 17px;
+      font-size: clamp(32px, 5vw, 56px);
+      line-height: 1.08;
+    }
+
+    .adv-hero p {
+      max-width: 780px;
+      margin: 0 auto;
+      color: #d9e6f5;
+      font-size: 18px;
+      line-height: 1.65;
+    }
+
+    .adv-plans-section {
+      padding: 58px 0 76px;
+    }
+
+    .adv-section-head {
+      max-width: 780px;
+      margin: 0 auto 40px;
+      text-align: center;
+    }
+
+    .adv-kicker {
+      display: inline-block;
+      margin-bottom: 12px;
+      padding: 8px 14px;
+      border-radius: 999px;
+      background: #e8f0ff;
+      color: var(--adv-primary-2);
+      font-size: 12px;
+      font-weight: 900;
+      letter-spacing: 1px;
+    }
+
+    .adv-section-head h2 {
+      margin: 0 0 12px;
+      color: var(--adv-dark);
+      font-size: clamp(28px, 4vw, 42px);
+    }
+
+    .adv-section-head p {
+      margin: 0;
+      color: var(--adv-muted);
+      font-size: 17px;
+      line-height: 1.65;
+    }
+
+    .adv-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 22px;
+      align-items: stretch;
+    }
+
+    .adv-card {
+      position: relative;
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+      padding: 30px 25px 25px;
+      border: 1px solid var(--adv-border);
+      border-radius: 20px;
+      background: var(--adv-card);
+      box-shadow: var(--adv-shadow);
+    }
+
+    .adv-card-highlight {
+      border: 2px solid var(--adv-primary-2);
+      transform: translateY(-8px);
+    }
+
+    .adv-ribbon {
+      position: absolute;
+      top: -15px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 8px 15px;
+      border-radius: 999px;
+      background: var(--adv-primary-2);
+      color: #ffffff;
+      font-size: 11px;
+      font-weight: 900;
+      white-space: nowrap;
+      letter-spacing: .5px;
+    }
+
+    .adv-card-dark {
+      border-color: var(--adv-dark);
+      background: var(--adv-dark);
+      color: #ffffff;
+    }
+
+    .adv-card h3 {
+      margin: 0 0 8px;
+      color: var(--adv-dark);
+      font-size: 24px;
+      line-height: 1.2;
+    }
+
+    .adv-card-dark h3 {
+      color: #ffffff;
+    }
+
+    .adv-subtitle {
+      min-height: 63px;
+      margin: 0;
+      color: var(--adv-muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .adv-card-dark .adv-subtitle {
+      color: #c7d4e1;
+    }
+
+    .adv-price-label {
+      display: block;
+      margin-top: 23px;
+      color: var(--adv-muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .adv-card-dark .adv-price-label {
+      color: #c7d4e1;
+    }
+
+    .adv-price {
+      display: flex;
+      align-items: flex-start;
+      margin: 7px 0 12px;
+      color: var(--adv-dark);
+    }
+
+    .adv-card-dark .adv-price {
+      color: #ffffff;
+    }
+
+    .adv-currency {
+      margin: 7px 5px 0 0;
+      font-size: 16px;
+      font-weight: 800;
+    }
+
+    .adv-price strong {
+      font-size: clamp(42px, 4vw, 50px);
+      line-height: 1;
+      letter-spacing: -1px;
+    }
+
+    .adv-period {
+      align-self: flex-end;
+      margin: 0 0 6px 5px;
+      color: var(--adv-muted);
+      font-size: 14px;
+    }
+
+    .adv-card-dark .adv-period {
+      color: #c7d4e1;
+    }
+
+    .adv-setup {
+      padding: 14px 0 19px;
+      border-bottom: 1px solid var(--adv-border);
+      color: #516579;
+      font-size: 14px;
+    }
+
+    .adv-card-dark .adv-setup {
+      border-color: rgba(255,255,255,.16);
+      color: #e5edf6;
+    }
+
+    .adv-features {
+      flex-grow: 1;
+      margin: 22px 0 26px;
+      padding: 0;
+      list-style: none;
+    }
+
+    .adv-features li {
+      position: relative;
+      margin-bottom: 12px;
+      padding-left: 25px;
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    .adv-features li::before {
+      position: absolute;
+      top: 0;
+      left: 0;
+      content: "✓";
+      color: var(--adv-success);
+      font-weight: 900;
+    }
+
+    .adv-card-dark .adv-features li::before {
+      color: #72e0b1;
+    }
+
+    .adv-button {
+      display: inline-flex;
+      min-height: 48px;
+      align-items: center;
+      justify-content: center;
+      padding: 13px 16px;
+      border-radius: 11px;
+      background: var(--adv-primary);
+      color: #ffffff;
+      text-align: center;
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 900;
+      transition: transform .2s ease, background .2s ease;
+    }
+
+    .adv-button:hover {
+      transform: translateY(-2px);
+      background: var(--adv-primary-2);
+    }
+
+    .adv-card-highlight .adv-button {
+      background: var(--adv-primary-2);
+    }
+
+    .adv-card-dark .adv-button {
+      background: #ffffff;
+      color: var(--adv-dark);
+    }
+
+    .adv-card-dark .adv-button:hover {
+      background: #e7eef6;
+    }
+
+    .adv-note {
+      margin-top: 28px;
+      padding: 18px;
+      border: 1px solid var(--adv-border);
+      border-radius: 14px;
+      background: #ffffff;
+      text-align: center;
+      color: #506274;
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    .adv-contact {
+      padding: 0 0 70px;
+    }
+
+    .adv-contact-box {
+      padding: 34px 25px;
+      border-radius: 20px;
+      background: linear-gradient(135deg, #123d73, #1f65d6);
+      color: #ffffff;
+      text-align: center;
+      box-shadow: var(--adv-shadow);
+    }
+
+    .adv-contact-box h2 {
+      margin: 0 0 10px;
+      font-size: 30px;
+    }
+
+    .adv-contact-box p {
+      max-width: 720px;
+      margin: 0 auto;
+      color: #e6eef8;
+      line-height: 1.6;
+    }
+
+    .adv-contact-alert {
+      display: inline-block;
+      margin-top: 19px;
+      padding: 11px 14px;
+      border-radius: 10px;
+      background: rgba(255,255,255,.14);
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .adv-footer {
+      padding: 24px 20px;
+      background: #091a2b;
+      color: #b9c7d6;
+      text-align: center;
+      font-size: 13px;
+    }
+
+    @media (max-width: 1080px) {
+      .adv-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .adv-card-highlight {
+        transform: none;
+      }
+    }
+
+    @media (max-width: 650px) {
+      .adv-hero {
+        padding-top: 48px;
+      }
+
+      .adv-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .adv-card {
+        padding: 27px 22px 23px;
+      }
+
+      .adv-subtitle {
+        min-height: auto;
+      }
+
+      .adv-price strong {
+        font-size: 45px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <main class="adv-page">
+
+    <header class="adv-hero">
+      <div class="adv-wrap">
+        <div class="adv-brand">
+          <span class="adv-brand-badge">⚖</span>
+          <span>ADVOGO SEGURO</span>
+        </div>
+
+        <h1>Proteção profissional para advogados e escritórios</h1>
+
+        <p>
+          Fortaleça a segurança da comunicação com seus clientes, confirme canais
+          oficiais e registre tentativas suspeitas em uma plataforma especializada.
+        </p>
+      </div>
+    </header>
+
+    <section class="adv-plans-section" id="planos">
+      <div class="adv-wrap">
+
+        <div class="adv-section-head">
+          <span class="adv-kicker">PLANOS ADVOGO SEGURO</span>
+          <h2>Escolha a proteção adequada para sua estrutura</h2>
+          <p>
+            Valores mensais definidos conforme a quantidade de advogados e o nível
+            de implantação e suporte necessário.
+          </p>
+        </div>
+
+        <div class="adv-grid">
+
+          <article class="adv-card">
+            <h3>Proteção Profissional</h3>
+            <p class="adv-subtitle">Para advogado autônomo ou sociedade individual.</p>
+
+            <span class="adv-price-label">Mensalidade</span>
+            <div class="adv-price">
+              <span class="adv-currency">R$</span>
+              <strong>179</strong>
+              <span class="adv-period">/mês</span>
+            </div>
+
+            <div class="adv-setup">
+              Implantação: <strong>R$ 297</strong>
+            </div>
+
+            <ul class="adv-features">
+              <li>1 advogado</li>
+              <li>Cadastro de clientes e processos</li>
+              <li>Página profissional de verificação</li>
+              <li>Contatos oficiais cadastrados</li>
+              <li>Registro de tentativas suspeitas</li>
+              <li>Alertas e histórico de segurança</li>
+              <li>Suporte técnico</li>
+            </ul>
+
+            <a href="#contato" class="adv-button">Contratar plano</a>
+          </article>
+
+          <article class="adv-card adv-card-highlight">
+            <div class="adv-ribbon">MAIS CONTRATADO</div>
+
+            <h3>Escritório Protegido</h3>
+            <p class="adv-subtitle">Para pequenos escritórios e equipes jurídicas.</p>
+
+            <span class="adv-price-label">Mensalidade</span>
+            <div class="adv-price">
+              <span class="adv-currency">R$</span>
+              <strong>497</strong>
+              <span class="adv-period">/mês</span>
+            </div>
+
+            <div class="adv-setup">
+              Implantação: <strong>R$ 697</strong>
+            </div>
+
+            <ul class="adv-features">
+              <li>Até 5 advogados</li>
+              <li>Painel administrativo do escritório</li>
+              <li>Cadastro de clientes e processos</li>
+              <li>Contatos oficiais por advogado</li>
+              <li>Página institucional de verificação</li>
+              <li>Relatórios de segurança</li>
+              <li>Identidade visual do escritório</li>
+              <li>Treinamento inicial</li>
+              <li>Suporte prioritário</li>
+            </ul>
+
+            <a href="#contato" class="adv-button">Proteger meu escritório</a>
+          </article>
+
+          <article class="adv-card">
+            <h3>Blindagem Jurídica</h3>
+            <p class="adv-subtitle">Para escritórios médios com maior volume de atendimento.</p>
+
+            <span class="adv-price-label">Mensalidade</span>
+            <div class="adv-price">
+              <span class="adv-currency">R$</span>
+              <strong>997</strong>
+              <span class="adv-period">/mês</span>
+            </div>
+
+            <div class="adv-setup">
+              Implantação: <strong>R$ 1.497</strong>
+            </div>
+
+            <ul class="adv-features">
+              <li>Até 20 advogados</li>
+              <li>Todos os recursos dos planos anteriores</li>
+              <li>Controle de usuários e permissões</li>
+              <li>Histórico completo de verificações</li>
+              <li>Relatórios avançados</li>
+              <li>Exportação de informações</li>
+              <li>Treinamento para a equipe</li>
+              <li>Implantação assistida</li>
+              <li>Suporte prioritário</li>
+            </ul>
+
+            <a href="#contato" class="adv-button">Solicitar contratação</a>
+          </article>
+
+          <article class="adv-card adv-card-dark">
+            <h3>Corporativo</h3>
+            <p class="adv-subtitle">Para grandes escritórios, filiais e departamentos jurídicos.</p>
+
+            <span class="adv-price-label">A partir de</span>
+            <div class="adv-price">
+              <span class="adv-currency">R$</span>
+              <strong>1.997</strong>
+              <span class="adv-period">/mês</span>
+            </div>
+
+            <div class="adv-setup">
+              Implantação: <strong>sob consulta</strong>
+            </div>
+
+            <ul class="adv-features">
+              <li>Acima de 20 advogados</li>
+              <li>Condições personalizadas</li>
+              <li>Atendimento para filiais</li>
+              <li>Configuração conforme a estrutura</li>
+              <li>Treinamentos personalizados</li>
+              <li>Suporte dedicado</li>
+              <li>Possibilidade de integrações</li>
+            </ul>
+
+            <a href="#contato" class="adv-button">Falar com um consultor</a>
+          </article>
+
+        </div>
+
+        <div class="adv-note">
+          <strong>Condição especial:</strong>
+          consulte benefícios disponíveis para contratação anual.
+        </div>
+      </div>
+    </section>
+
+    <section class="adv-contact" id="contato">
+      <div class="adv-wrap">
+        <div class="adv-contact-box">
+          <h2>Solicite uma apresentação</h2>
+          <p>
+            Conheça os recursos do ADVOGO SEGURO e escolha o plano adequado ao
+            tamanho do seu escritório.
+          </p>
+          <div class="adv-contact-alert">
+            Substitua este texto pelo seu WhatsApp e e-mail oficiais antes de publicar.
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="adv-footer">
+    © 2026 ADVOGO SEGURO — Todos os direitos reservados.
+  </footer>
+</body>
+</html>
