@@ -1,13 +1,18 @@
 services:
   - type: web
-    name: advogo-seguro-api
+    name: advogo-seguro
     env: python
-    plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
+    buildCommand: pip install --no-cache-dir -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 60 --graceful-timeout 30 --keep-alive 5 --max-requests 1000 --max-requests-jitter 100 --access-logfile - --error-logfile -
+    healthCheckPath: /api/health
+    maxShutdownDelaySeconds: 30
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
+      - key: PYTHONUNBUFFERED
+        value: 1
+      - key: APP_VERSION
+        value: 1.0.0
       - key: SECRET_KEY
         generateValue: true
       - key: JWT_SECRET
@@ -16,5 +21,35 @@ services:
         sync: false
       - key: HOTMART_WEBHOOK_TOKEN
         sync: false
+      - key: HOTMART_PLAN_MAP
+        sync: false
+      - key: COMMERCIAL_WHATSAPP
+        sync: false
+      - key: COMMERCIAL_EMAIL
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: JWT_TTL_HORAS
+        value: 12
+      - key: SENHA_MIN_CARACTERES
+        value: 10
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: 587
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+      - key: SMTP_SECURITY
+        value: tls
+      - key: PRIVACY_CONTACT_EMAIL
+        sync: false
+      - key: LGPD_RETENCAO_LOGS_DIAS
+        value: 0
       - key: DATABASE_URL
         sync: false

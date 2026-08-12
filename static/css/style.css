@@ -572,3 +572,40 @@ table.spy-table tr:hover td { background: var(--cinza-claro); }
   font-size: 1rem;
   font-weight: 700;
 }
+
+
+/* Camada 3 — UX/UI */
+.optional-label { color: var(--texto-suave); font-weight: 500; font-size: .78rem; }
+.text-danger-strong { color: var(--vermelho); font-weight: 700; }
+.alert-aviso { background: var(--amarelo-bg); color: #7a570a; border: 1px solid #ead49a; }
+a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 3px solid rgba(21,57,122,.28); outline-offset: 2px;
+}
+.sidebar { overflow-y: auto; }
+.mobile-topbar { position: sticky; top: 0; z-index: 45; }
+.mobile-topbar button { min-width: 44px; min-height: 44px; border-radius: 8px; }
+.sidebar-backdrop {
+  position: fixed; inset: 0; z-index: 49; background: rgba(10,31,61,.48);
+  opacity: 0; visibility: hidden; transition: opacity .2s ease, visibility .2s ease;
+}
+.sidebar-backdrop.show { opacity: 1; visibility: visible; }
+body.sidebar-open { overflow: hidden; }
+table.spy-table { min-width: 720px; }
+@media (max-width: 860px) {
+  .sidebar { box-shadow: 18px 0 40px rgba(10,31,61,.22); }
+  .main-content { width: 100%; }
+}
+@media (max-width: 560px) {
+  .auth-form-col { padding: 24px 14px; }
+  .auth-card { padding: 30px 22px; }
+  .panel { padding: 18px; border-radius: 12px; }
+  .topbar { margin-bottom: 20px; }
+  .topbar > .btn-spy { width: 100%; }
+  .modal-overlay { padding: 10px; align-items: flex-end; }
+  .modal-box { max-height: calc(100vh - 20px); padding: 22px 18px; border-radius: 16px 16px 10px 10px; }
+  .modal-actions { flex-direction: column-reverse; }
+  .codigo-destaque .codigo { font-size: 1.45rem; letter-spacing: 1px; overflow-wrap: anywhere; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
+}

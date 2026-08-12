@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Planos do ADVOGO SEGURO para advogados e escritórios.">
+  <title>Planos | ADVOGO SEGURO</title>
+  <style>
+    :root{--p:#123d73;--p2:#1f65d6;--dark:#0d2238;--txt:#243b53;--mut:#66788a;--bg:#f5f8fc;--card:#fff;--bd:#dbe5ef;--ok:#16875f}
+    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--txt);font-family:Arial,Helvetica,sans-serif}
+    .hero{padding:58px 20px;background:linear-gradient(135deg,var(--dark),var(--p));color:#fff;text-align:center}
+    .wrap{width:min(1180px,calc(100% - 30px));margin:auto}.hero h1{font-size:clamp(32px,5vw,54px);margin:0 0 14px}.hero p{max-width:780px;margin:auto;line-height:1.6;color:#dce8f5}
+    .trial{margin:30px auto 0;max-width:760px;padding:15px;border-radius:14px;background:rgba(255,255,255,.12);font-weight:700}
+    .section{padding:54px 0 70px}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:20px}
+    .card{display:flex;flex-direction:column;background:var(--card);border:1px solid var(--bd);border-radius:18px;padding:26px;box-shadow:0 10px 28px rgba(13,34,56,.08)}
+    .card h2{margin:0;color:var(--dark);font-size:22px}.cap{color:var(--mut);min-height:44px;margin:8px 0 18px}
+    .price{font-size:42px;font-weight:900;color:var(--dark)}.price small{font-size:14px;font-weight:600;color:var(--mut)}
+    .setup{margin:10px 0 18px;padding-bottom:16px;border-bottom:1px solid var(--bd);font-size:14px}
+    ul{list-style:none;padding:0;margin:0 0 24px;flex:1}li{margin:10px 0;padding-left:22px;position:relative;line-height:1.4}li:before{content:"✓";position:absolute;left:0;color:var(--ok);font-weight:900}
+    .btn{display:flex;min-height:48px;align-items:center;justify-content:center;border-radius:10px;background:var(--p);color:#fff;text-decoration:none;font-weight:800;padding:12px;text-align:center}
+    .btn:hover{background:var(--p2)}.note{margin-top:28px;padding:18px;background:#fff;border:1px solid var(--bd);border-radius:14px;line-height:1.55;text-align:center}
+    .contact{padding:0 0 60px}.contact-box{background:#fff;border:1px solid var(--bd);border-radius:18px;padding:28px;text-align:center}.contact-actions{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-top:18px}
+    footer{padding:24px;text-align:center;background:#091a2b;color:#bdcad7}.small{font-size:13px;color:var(--mut)}
+    @media(max-width:1020px){.grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:620px){.grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+<header class="hero">
+  <div class="wrap">
+    <div>⚖️ ADVOGO SEGURO</div>
+    <h1>Planos claros, limites claros</h1>
+    <p>Os planos abaixo usam a mesma tabela de preços e limites aplicada pelo sistema. A diferença principal de capacidade é a quantidade de advogados ativos.</p>
+    <div class="trial">Teste por {{ trial_dias }} dias com 1 advogado ativo antes da contratação.</div>
+  </div>
+</header>
+
+<main>
+<section class="section">
+  <div class="wrap">
+    <div class="grid">
+      {% for plano in planos %}
+      <article class="card">
+        <h2>{{ plano.nome }}</h2>
+        <p class="cap">
+          {% if plano.limite_advogados %}
+            {% if plano.limite_advogados == 1 %}1 advogado ativo{% else %}Até {{ plano.limite_advogados }} advogados ativos{% endif %}
+          {% else %}
+            Acima de 20 advogados — capacidade definida em proposta
+          {% endif %}
+        </p>
+
+        <div class="price">
+          {% if plano.codigo == 'corporativo' %}<span style="font-size:14px">a partir de</span><br>{% endif %}
+          R$ {{ "{:,.0f}".format(plano.preco_mensal).replace(",", ".") }}
+          <small>/mês</small>
+        </div>
+
+        <div class="setup">
+          Implantação:
+          {% if plano.implantacao is none %}
+            <strong>sob consulta</strong>
+          {% else %}
+            <strong>R$ {{ "{:,.0f}".format(plano.implantacao).replace(",", ".") }}</strong>
+          {% endif %}
+        </div>
+
+        <ul>
+          <li>Cadastro de clientes e processos</li>
+          <li>Contatos oficiais por advogado</li>
+          <li>Verificação de contato pelo cliente</li>
+          <li>Contato Seguro com código temporário</li>
+          <li>Registro de tentativas suspeitas</li>
+          <li>Relatórios em PDF</li>
+          <li>Histórico de segurança e verificações</li>
+        </ul>
+
+        {% if commercial_whatsapp %}
+          <a class="btn" target="_blank" rel="noopener"
+             href="https://wa.me/{{ commercial_whatsapp }}?text={{ ('Olá, quero contratar o plano ' ~ plano.nome ~ ' do ADVOGO SEGURO.')|urlencode }}">
+             Solicitar contratação
+          </a>
+        {% elif commercial_email %}
+          <a class="btn" href="mailto:{{ commercial_email }}?subject={{ ('ADVOGO SEGURO - ' ~ plano.nome)|urlencode }}">Solicitar contratação</a>
+        {% else %}
+          <a class="btn" href="/escritorio/cadastro">Começar teste de {{ trial_dias }} dias</a>
+        {% endif %}
+      </article>
+      {% endfor %}
+    </div>
+
+    <div class="note">
+      <strong>Importante:</strong> mensalidade e implantação são itens distintos.
+      Serviços adicionais ou integrações personalizadas somente devem constar na proposta quando forem efetivamente contratados.
+    </div>
+  </div>
+</section>
+
+<section class="contact">
+  <div class="wrap">
+    <div class="contact-box">
+      <h2>Quer ver funcionando antes de contratar?</h2>
+      <p>Crie uma conta de teste ou solicite uma demonstração comercial.</p>
+      <div class="contact-actions">
+        <a class="btn" href="/escritorio/cadastro">Testar por {{ trial_dias }} dias</a>
+        {% if commercial_whatsapp %}
+          <a class="btn" target="_blank" rel="noopener"
+             href="https://wa.me/{{ commercial_whatsapp }}?text={{ 'Olá, quero uma demonstração do ADVOGO SEGURO.'|urlencode }}">Solicitar demonstração</a>
+        {% elif commercial_email %}
+          <a class="btn" href="mailto:{{ commercial_email }}?subject=Demonstracao%20ADVOGO%20SEGURO">Solicitar demonstração</a>
+        {% endif %}
+      </div>
+      {% if not commercial_whatsapp and not commercial_email %}
+        <p class="small">Canal comercial ainda não configurado; o teste gratuito permanece disponível.</p>
+      {% endif %}
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  © 2026 ADVOGO SEGURO · <a href="/privacidade" style="color:#fff">Aviso de Privacidade</a>
+</footer>
+</body>
+</html>

@@ -1,0 +1,38 @@
+# Segredos e configuração local
+.env
+.env.*
+!.env.example
+
+# Bancos locais
+instance/
+*.db
+*.sqlite
+*.sqlite3
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Uploads gerados em runtime
+static/uploads/
+
+# Logs e temporários
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# Arquivos legados/backup não devem entrar na release
+backups/
+app.py.backup*
+templates/*.backup*
+*_MASTER_*.zip
+
+# Backups e capturas locais
+*.dir.tar.gz
+screencapture-*.png
+templates/screencapture-*.png
+ADVOGO_SEGURO_CAMADA*_APLICAR/

@@ -32,7 +32,7 @@ def _delete(client, path, token=None, body=None):
 
 def registrar_escritorio(client, email='escritorio@teste.com'):
     resp = _post(client, '/api/escritorio/registro', body={
-        'nome': 'Escritorio Teste', 'email': email, 'senha': 'senha123', 'cnpj': ''
+        'nome': 'Escritorio Teste', 'email': email, 'senha': 'TesteSenha123!', 'cnpj': ''
     })
     assert resp.status_code == 200, resp.get_json()
     return resp.get_json()['token']

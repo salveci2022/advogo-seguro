@@ -46,11 +46,11 @@
         </div>
         <div class="form-group">
           <label>Nova senha</label>
-          <input type="password" class="form-control" id="senhaNova" required minlength="6" placeholder="Mínimo 6 caracteres">
+          <input type="password" class="form-control" id="senhaNova" required minlength="10" placeholder="Mínimo 10 caracteres">
         </div>
         <div class="form-group">
           <label>Confirme a nova senha</label>
-          <input type="password" class="form-control" id="senhaNovaConfirma" required minlength="6">
+          <input type="password" class="form-control" id="senhaNovaConfirma" required minlength="10">
         </div>
         <button type="submit" class="btn-spy btn-spy-primary" id="btnTrocarSenha">Salvar nova senha</button>
       </form>
@@ -59,6 +59,7 @@
     <div class="panel">
       <div class="panel-head"><h2>Sessão</h2></div>
       <p style="color:var(--texto-suave); margin-bottom:18px;">Saia da sua conta neste dispositivo.</p>
+      <a class="btn-spy btn-spy-secondary" href="/planos" target="_blank" rel="noopener">💳 Ver planos e contratação</a>
       <button class="btn-spy btn-spy-danger" onclick="Auth.logout()">🚪 Sair da conta</button>
     </div>
   </main>

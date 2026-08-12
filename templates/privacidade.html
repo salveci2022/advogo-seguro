@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aviso de Privacidade — ADVOGO SEGURO</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <style>
+    .privacy-wrap{max-width:920px;margin:0 auto;padding:40px 20px 70px}
+    .privacy-card{background:#fff;border:1px solid var(--cinza-borda);border-radius:18px;padding:28px;margin:18px 0}
+    .privacy-card h2{margin-top:0}
+    .privacy-card li{margin:8px 0;line-height:1.55}
+    .privacy-note{padding:14px 16px;border-radius:12px;background:#f5f7fb;line-height:1.55}
+  </style>
+</head>
+<body>
+<div class="privacy-wrap">
+  <a href="/">← Voltar ao ADVOGO SEGURO</a>
+  <h1>Aviso de Privacidade</h1>
+  <p>Última revisão técnica: agosto de 2026.</p>
+
+  <div class="privacy-card">
+    <h2>1. O que este aviso explica</h2>
+    <p>Este aviso descreve como dados pessoais podem ser tratados no ADVOGO SEGURO para operar contas, processos, verificação de contatos, prevenção a fraudes, suporte, segurança e cumprimento de obrigações aplicáveis.</p>
+    <p>A definição de controlador e operador depende do contexto contratual e da finalidade de cada tratamento. O escritório que cadastra clientes e processos deve avaliar suas próprias responsabilidades e bases legais.</p>
+  </div>
+
+  <div class="privacy-card">
+    <h2>2. Categorias de dados</h2>
+    <ul>
+      <li>Conta do escritório: nome, CNPJ quando informado, e-mail, plano e autenticação protegida.</li>
+      <li>Advogados: nome, OAB quando informada, telefone oficial e foto quando enviada.</li>
+      <li>Clientes: nome, telefone, e-mail quando informado e credenciais protegidas.</li>
+      <li>Processos e segurança: identificadores do caso, verificações, tentativas suspeitas e Contato Seguro.</li>
+      <li>Logs técnicos: IP persistido de forma pseudonimizada para reduzir exposição.</li>
+    </ul>
+  </div>
+
+  <div class="privacy-card">
+    <h2>3. Finalidades</h2>
+    <ul>
+      <li>prestar e manter o serviço contratado;</li>
+      <li>autenticar usuários e proteger contas;</li>
+      <li>confirmar contatos autorizados e prevenir golpes;</li>
+      <li>registrar eventos necessários para segurança e auditoria;</li>
+      <li>atender solicitações de privacidade;</li>
+      <li>cumprir obrigações legais, regulatórias e contratuais quando aplicáveis.</li>
+    </ul>
+    <p>O consentimento não é tratado como base automática para todas as operações; a base aplicável depende da finalidade concreta.</p>
+  </div>
+
+  <div class="privacy-card">
+    <h2>4. Direitos do titular</h2>
+    <p>Quando aplicável, o titular pode solicitar confirmação e acesso, correção, anonimização, bloqueio, exclusão, portabilidade, informações sobre compartilhamento, oposição e revogação de consentimento quando o consentimento for a base utilizada.</p>
+    <p>Usuários autenticados possuem recurso para exportar seus dados e registrar solicitações. Um pedido de exclusão não provoca apagamento automático: ele precisa ser analisado conforme a finalidade, a base legal e eventuais obrigações de retenção.</p>
+  </div>
+
+  <div class="privacy-card">
+    <h2>5. Segurança e retenção</h2>
+    <p>O sistema utiliza autenticação, cookies protegidos, CSRF, isolamento entre escritórios, validação de uploads, integridade de banco e registros de auditoria.</p>
+    {% if retencao_logs_dias and retencao_logs_dias > 0 %}
+      <p>O período técnico configurado para retenção de logs é de {{ retencao_logs_dias }} dias, sujeito à política e às obrigações aplicáveis.</p>
+    {% else %}
+      <p>O período de retenção deve ser definido pela organização responsável. O sistema possui mecanismo técnico de limpeza, mas não apaga logs automaticamente sem uma política configurada.</p>
+    {% endif %}
+  </div>
+
+  <div class="privacy-card">
+    <h2>6. Canal de privacidade</h2>
+    {% if privacy_contact_email %}
+      <p>Canal para solicitações: <strong>{{ privacy_contact_email }}</strong>.</p>
+    {% else %}
+      <p class="privacy-note"><strong>Configuração pendente:</strong> definir <code>PRIVACY_CONTACT_EMAIL</code> antes do uso comercial em produção.</p>
+    {% endif %}
+  </div>
+
+  <div class="privacy-card">
+    <h2>7. Observação</h2>
+    <p>Esta página implementa transparência técnica e não substitui análise jurídica de contratos, bases legais, compartilhamentos, transferências internacionais e prazos de retenção específicos.</p>
+  </div>
+</div>
+</body>
+</html>

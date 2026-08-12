@@ -174,7 +174,7 @@
   <div class="modal-box">
     <h3>✅ Processo criado com sucesso!</h3>
     <p style="color:var(--texto-suave); font-size:0.9rem;">
-      Compartilhe este código com o cliente. Ele usará esse código junto com o telefone e a senha temporária para acessar a área de verificação.
+      Guarde este código do processo. O cliente acessa a área com telefone e senha; o código pode ser usado para tornar a verificação de um contato mais precisa.
     </p>
     <div class="codigo-destaque">
       <div class="label">Código único do processo</div>
@@ -182,6 +182,7 @@
       <div class="senha-cliente" id="senhaClienteWrap" style="display:none;">
         Senha temporária do cliente: <b id="senhaClienteGerada">—</b>
       </div>
+      <div class="helper-text" id="mensagemAcessoCliente" style="margin-top:10px;"></div>
     </div>
     <div class="modal-actions">
       <button class="btn-spy btn-spy-primary btn-spy-block" onclick="fecharModalResultado()">Concluir</button>
@@ -344,7 +345,7 @@ async function abrirReenviarAcesso(clienteId) {
   document.getElementById('linkReenviar').value = 'Gerando link...';
   document.getElementById('modalReenviarAcesso').classList.add('show');
   try {
-    const data = await apiRequest('/api/escritorio/cliente/' + clienteId + '/link-reset');
+    const data = await apiRequest('/api/escritorio/cliente/' + clienteId + '/link-reset', { method: 'POST' });
     document.getElementById('linkReenviar').value = window.location.origin + data.link;
   } catch (err) {
     showAlert('alertaReenviar', err.message, 'erro');
@@ -410,6 +411,7 @@ document.getElementById('formProcesso').addEventListener('submit', async (e) => 
     } else {
       document.getElementById('senhaClienteWrap').style.display = 'none';
     }
+    document.getElementById('mensagemAcessoCliente').textContent = data.mensagem_acesso || '';
     document.getElementById('modalResultado').classList.add('show');
   } catch (err) {
     showAlert('alertaModal', err.message, 'erro');

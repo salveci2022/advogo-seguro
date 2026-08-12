@@ -53,7 +53,7 @@
 </div>
 
 <!-- Modal cadastro/edição -->
-<div class="modal-overlay" id="modalAdvogado">
+<div class="modal-overlay" id="modalAdvogado" role="dialog" aria-modal="true" aria-labelledby="tituloModalAdvogado">
   <div class="modal-box">
     <h3 id="tituloModalAdvogado">Cadastrar advogado</h3>
     <div id="alertaModal" class="alert-box"></div>
@@ -72,16 +72,16 @@
         <input type="text" class="form-control" id="advTelefone" required placeholder="(61) 99999-9999">
       </div>
       <div class="form-group">
-        <label>Foto URL</label>
+        <label>Foto por link <span class="optional-label">(opcional)</span></label>
         <input type="url" class="form-control" id="advFoto" placeholder="https://..." oninput="atualizarPreviaFoto()">
-        <div class="helper-text">Cole um link de imagem, ou envie um arquivo abaixo (jpg, jpeg, png ou webp, até 3 MB).</div>
+        <div class="helper-text">Cole um link de imagem, ou envie um arquivo abaixo (jpg, jpeg, png ou webp, até 3 MB). Imagens grandes são reduzidas automaticamente antes do envio.</div>
       </div>
       <div class="form-group">
-        <label>Ou enviar foto do computador</label>
+        <label>Enviar foto do computador <span class="optional-label">(opcional)</span></label>
         <input type="file" class="form-control" id="advFotoArquivo" accept=".jpg,.jpeg,.png,.webp" onchange="previaArquivoSelecionado()">
       </div>
       <div class="form-group" style="text-align:center;">
-        <img id="previaFoto" src="" alt="Pré-visualização" style="display:none; width:90px; height:90px; border-radius:50%; object-fit:cover; border:3px solid var(--dourado); margin:0 auto;">
+        <img id="previaFoto" src="" alt="Pré-visualização da foto do advogado" style="display:none; width:90px; height:90px; border-radius:50%; object-fit:cover; border:3px solid var(--dourado); margin:0 auto;" onerror="this.style.display='none'">
       </div>
       <div class="modal-actions">
         <button type="button" class="btn-spy btn-spy-ghost btn-spy-block" onclick="fecharModalNovo()">Cancelar</button>
@@ -141,12 +141,26 @@ async function carregarPlanoAdvogados() {
       window.renderizarPlanoSidebar(plano);
     }
 
-    const limiteTexto = plano.limite_advogados === null
-      ? `${plano.advogados_ativos} advogado(s) ativo(s) • limite conforme contrato`
-      : `${plano.advogados_ativos} de ${plano.limite_advogados} advogado(s) ativo(s)`;
+    const plural = (n, singular, plural) => Number(n) === 1 ? singular : plural;
+    let limiteTexto;
+    if (plano.limite_advogados === null) {
+      limiteTexto = `${plano.advogados_ativos} ${plural(plano.advogados_ativos, 'advogado ativo', 'advogados ativos')} • limite conforme contrato`;
+    } else {
+      const restantes = Math.max(Number(plano.limite_advogados) - Number(plano.advogados_ativos), 0);
+      limiteTexto = `${plano.advogados_ativos} de ${plano.limite_advogados} ${plural(plano.limite_advogados, 'advogado ativo', 'advogados ativos')}`;
+      if (plano.plano_ativo && restantes > 0) {
+        limiteTexto += ` • ${restantes} ${plural(restantes, 'vaga disponível', 'vagas disponíveis')}`;
+      } else if (plano.plano_ativo && restantes === 0) {
+        limiteTexto += ' • limite atingido';
+      }
+    }
 
     resumo.innerHTML = `<strong>${escapeHtml(plano.nome)}</strong> — ${limiteTexto}` +
-      (plano.plano_ativo ? '' : ' • <span style="color:var(--vermelho);font-weight:700;">plano inativo</span>');
+      (plano.plano_ativo ? '' : ' • <span class="text-danger-strong">plano inativo</span>');
+
+    if (plano.pode_adicionar_advogado) {
+      hideAlert('alertaAdvogados');
+    }
 
     botaoNovo.disabled = !plano.pode_adicionar_advogado;
     botaoNovo.title = plano.pode_adicionar_advogado
@@ -169,6 +183,7 @@ function abrirModalNovo() {
     return;
   }
   advogadoEditandoId = null;
+  hideAlert('alertaModal');
   document.getElementById('tituloModalAdvogado').textContent = 'Cadastrar advogado';
   document.getElementById('btnSalvarAdvogado').textContent = 'Salvar';
   document.getElementById('formAdvogado').reset();
@@ -178,6 +193,7 @@ function abrirModalNovo() {
 
 function abrirModalEditar(adv) {
   advogadoEditandoId = adv.id;
+  hideAlert('alertaModal');
   document.getElementById('tituloModalAdvogado').textContent = 'Editar advogado';
   document.getElementById('btnSalvarAdvogado').textContent = 'Salvar alterações';
   document.getElementById('advNome').value = adv.nome || '';
@@ -200,22 +216,53 @@ function atualizarPreviaFoto() {
   }
 }
 
+let previaArquivoUrl = null;
+
 function previaArquivoSelecionado() {
   const arquivo = document.getElementById('advFotoArquivo').files[0];
   if (!arquivo) return;
-  const leitor = new FileReader();
-  leitor.onload = (e) => {
-    const img = document.getElementById('previaFoto');
-    img.src = e.target.result;
-    img.style.display = 'block';
-  };
-  leitor.readAsDataURL(arquivo);
+  if (previaArquivoUrl) URL.revokeObjectURL(previaArquivoUrl);
+  previaArquivoUrl = URL.createObjectURL(arquivo);
+  const img = document.getElementById('previaFoto');
+  img.src = previaArquivoUrl;
+  img.style.display = 'block';
+}
+
+async function prepararFotoOtimizada(arquivo) {
+  // Evita transportar/armazenar fotos de vários megabytes para um avatar pequeno.
+  // Se o navegador não suportar a otimização, o upload original continua funcionando.
+  if (!arquivo || arquivo.size <= 350 * 1024 || !arquivo.type.startsWith('image/')) return arquivo;
+  if (typeof createImageBitmap !== 'function') return arquivo;
+
+  try {
+    const bitmap = await createImageBitmap(arquivo);
+    const maxLado = 512;
+    const escala = Math.min(1, maxLado / Math.max(bitmap.width, bitmap.height));
+    const largura = Math.max(1, Math.round(bitmap.width * escala));
+    const altura = Math.max(1, Math.round(bitmap.height * escala));
+    const canvas = document.createElement('canvas');
+    canvas.width = largura;
+    canvas.height = altura;
+    const ctx = canvas.getContext('2d', { alpha: false });
+    ctx.drawImage(bitmap, 0, 0, largura, altura);
+    bitmap.close();
+
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/webp', 0.82));
+    if (!blob || blob.size >= arquivo.size) return arquivo;
+    return new File([blob], 'foto-advogado.webp', { type: 'image/webp', lastModified: Date.now() });
+  } catch (_) {
+    return arquivo;
+  }
 }
 
 function fecharModalNovo() {
   document.getElementById('modalAdvogado').classList.remove('show');
   document.getElementById('formAdvogado').reset();
   document.getElementById('previaFoto').style.display = 'none';
+  if (previaArquivoUrl) {
+    URL.revokeObjectURL(previaArquivoUrl);
+    previaArquivoUrl = null;
+  }
   hideAlert('alertaModal');
   advogadoEditandoId = null;
 }
@@ -315,8 +362,15 @@ function escapeHtml(str) {
 document.getElementById('formAdvogado').addEventListener('submit', async (e) => {
   e.preventDefault();
   hideAlert('alertaModal');
+
   const btn = document.getElementById('btnSalvarAdvogado');
-  setLoading(btn, true, advogadoEditandoId ? 'Salvar alterações' : 'Salvar', 'Salvando...');
+  const eraEdicao = !!advogadoEditandoId;
+  const textoNormal = eraEdicao ? 'Salvar alterações' : 'Salvar';
+  setLoading(btn, true, textoNormal, 'Salvando...');
+
+  let idAlvo = advogadoEditandoId;
+  let cadastroPrincipalSalvo = false;
+
   try {
     const corpo = {
       nome: document.getElementById('advNome').value.trim(),
@@ -324,35 +378,65 @@ document.getElementById('formAdvogado').addEventListener('submit', async (e) => 
       telefone_oficial: document.getElementById('advTelefone').value.trim(),
       foto_url: document.getElementById('advFoto').value.trim()
     };
-    let idAlvo = advogadoEditandoId;
-    if (advogadoEditandoId) {
+
+    if (eraEdicao) {
       await apiRequest('/api/escritorio/advogados/' + advogadoEditandoId, { method: 'PUT', body: corpo });
     } else {
       const criado = await apiRequest('/api/escritorio/advogados', { method: 'POST', body: corpo });
       idAlvo = criado.id;
     }
 
+    cadastroPrincipalSalvo = true;
+
     const arquivoFoto = document.getElementById('advFotoArquivo').files[0];
     if (arquivoFoto && idAlvo) {
-      const formData = new FormData();
-      formData.append('foto', arquivoFoto);
-      const respUpload = await fetch('/api/escritorio/advogados/' + idAlvo + '/foto', {
-        method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + Auth.getToken() },
-        body: formData
-      });
-      if (!respUpload.ok) {
-        const erroUpload = await respUpload.json().catch(() => ({}));
-        throw new Error(erroUpload.erro || 'Não foi possível enviar a foto.');
+      try {
+        const arquivoParaUpload = await prepararFotoOtimizada(arquivoFoto);
+        const formData = new FormData();
+        formData.append('foto', arquivoParaUpload, arquivoParaUpload.name);
+        const respUpload = await fetch('/api/escritorio/advogados/' + idAlvo + '/foto', {
+          method: 'POST',
+          headers: { 'X-CSRF-Token': Auth.getCsrfToken() },
+          credentials: 'same-origin',
+          body: formData
+        });
+        if (!respUpload.ok) {
+          const erroUpload = await respUpload.json().catch(() => ({}));
+          throw new Error(erroUpload.erro || 'Não foi possível enviar a foto.');
+        }
+      } catch (erroFoto) {
+        fecharModalNovo();
+        await Promise.all([carregarAdvogados(), carregarPlanoAdvogados()]);
+        showAlert(
+          'alertaAdvogados',
+          `Advogado ${eraEdicao ? 'atualizado' : 'cadastrado'} com sucesso, mas a foto não pôde ser enviada. Edite o cadastro para tentar novamente.`,
+          'aviso'
+        );
+        return;
       }
     }
 
     fecharModalNovo();
     await Promise.all([carregarAdvogados(), carregarPlanoAdvogados()]);
+    showAlert(
+      'alertaAdvogados',
+      eraEdicao ? 'Advogado atualizado com sucesso.' : 'Advogado cadastrado com sucesso.',
+      'sucesso'
+    );
   } catch (err) {
-    showAlert('alertaModal', err.message, 'erro');
+    if (cadastroPrincipalSalvo) {
+      fecharModalNovo();
+      await Promise.all([carregarAdvogados(), carregarPlanoAdvogados()]);
+      showAlert(
+        'alertaAdvogados',
+        'Os dados principais foram salvos. Ocorreu um problema em uma etapa complementar; revise o cadastro antes de tentar novamente.',
+        'aviso'
+      );
+    } else {
+      showAlert('alertaModal', err.message, 'erro');
+    }
   } finally {
-    setLoading(btn, false, advogadoEditandoId ? 'Salvar alterações' : 'Salvar');
+    setLoading(btn, false, textoNormal);
   }
 });
 

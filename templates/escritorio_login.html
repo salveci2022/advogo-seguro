@@ -191,8 +191,9 @@ document.getElementById('formEsqueci').addEventListener('submit', async (e) => {
       body: { email: document.getElementById('emailEsqueci').value.trim() }
     });
     let msg = data.mensagem;
-    if (data.link_dev) {
-      msg += ' (Modo dev — sem envio de e-mail configurado ainda. Link: ' + window.location.origin + data.link_dev + ')';
+    // link_dev só pode existir em desenvolvimento local; nunca em produção.
+    if (data.link_dev && ['localhost', '127.0.0.1'].includes(window.location.hostname)) {
+      msg += ' Link local de teste: ' + window.location.origin + data.link_dev;
     }
     showAlert('alertaEsqueci', msg, 'sucesso');
   } catch (err) {
@@ -202,5 +203,6 @@ document.getElementById('formEsqueci').addEventListener('submit', async (e) => {
   }
 });
 </script>
+<div style="text-align:center;padding:12px"><a href="/privacidade">Aviso de Privacidade</a></div>
 </body>
 </html>

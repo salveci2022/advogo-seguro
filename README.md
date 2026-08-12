@@ -47,3 +47,17 @@ Configure as variáveis de ambiente no Render:
 - `ADMIN_SECRET`
 - `HOTMART_WEBHOOK_TOKEN`
 - `DATABASE_URL`
+
+## Recuperação de senha por e-mail
+
+Para habilitar "Esqueci minha senha" do escritório em produção, configure:
+
+- `PUBLIC_BASE_URL` — URL pública do sistema, sem barra final.
+- `SMTP_HOST`
+- `SMTP_PORT`
+- `SMTP_USER`
+- `SMTP_PASSWORD`
+- `SMTP_FROM`
+- `SMTP_SECURITY` — `tls`, `ssl` ou `none`.
+
+Em produção, se o SMTP não estiver configurado, a rota de recuperação retorna indisponibilidade temporária e nunca expõe o token de redefinição. `link_dev` só é disponibilizado fora de produção.

@@ -5,28 +5,44 @@
 const API_BASE = window.location.origin; // usa automaticamente o domínio local ou do Render
 
 const Auth = {
-  TOKEN_KEY: 'advogo_seguro_token',
+  TOKEN_KEY: 'advogo_seguro_token', // legado: removido por segurança
   TIPO_KEY: 'advogo_seguro_tipo',
   NOME_KEY: 'advogo_seguro_nome',
   PLANO_KEY: 'advogo_seguro_plano',
 
-  setSession(token, tipo, nome, plano) {
-    localStorage.setItem(this.TOKEN_KEY, token);
+  setSession(_tokenIgnorado, tipo, nome, plano) {
+    // O JWT fica em cookie HttpOnly e não é acessível ao JavaScript.
+    localStorage.removeItem(this.TOKEN_KEY);
     localStorage.setItem(this.TIPO_KEY, tipo);
     localStorage.setItem(this.NOME_KEY, nome || '');
     if (plano) localStorage.setItem(this.PLANO_KEY, plano);
   },
-  getToken() { return localStorage.getItem(this.TOKEN_KEY); },
+  getToken() { return null; },
   getTipo() { return localStorage.getItem(this.TIPO_KEY); },
   getNome() { return localStorage.getItem(this.NOME_KEY) || ''; },
   getPlano() { return localStorage.getItem(this.PLANO_KEY) || ''; },
-  isLogged() { return !!this.getToken(); },
-  logout() {
+  isLogged() { return !!this.getTipo(); },
+  getCsrfToken() {
+    const prefixo = 'advogo_seguro_csrf=';
+    const item = document.cookie.split('; ').find(v => v.startsWith(prefixo));
+    return item ? decodeURIComponent(item.substring(prefixo.length)) : '';
+  },
+  clearLocal() {
     localStorage.removeItem(this.TOKEN_KEY);
     localStorage.removeItem(this.TIPO_KEY);
     localStorage.removeItem(this.NOME_KEY);
     localStorage.removeItem(this.PLANO_KEY);
-    window.location.href = '/';
+  },
+  logout() {
+    const csrf = this.getCsrfToken();
+    fetch('/api/logout', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: csrf ? { 'X-CSRF-Token': csrf } : {}
+    }).catch(() => {}).finally(() => {
+      this.clearLocal();
+      window.location.href = '/';
+    });
   },
   /** Redireciona se não houver sessão do tipo esperado */
   requireTipo(tipoEsperado, redirectTo) {
@@ -45,9 +61,9 @@ async function apiRequest(path, options = {}) {
   const { method = 'GET', body = null, auth = true } = options;
 
   const headers = { 'Content-Type': 'application/json' };
-  if (auth) {
-    const token = Auth.getToken();
-    if (token) headers['Authorization'] = 'Bearer ' + token;
+  if (auth && !['GET', 'HEAD', 'OPTIONS'].includes(method.toUpperCase())) {
+    const csrf = Auth.getCsrfToken();
+    if (csrf) headers['X-CSRF-Token'] = csrf;
   }
 
   const url = new URL(path, API_BASE).toString();
@@ -96,7 +112,9 @@ async function apiRequest(path, options = {}) {
   if (response.status === 401) {
     // sessão expirada ou inválida
     if (auth) {
-      Auth.logout();
+      const tipoAtual = Auth.getTipo();
+      Auth.clearLocal();
+      window.location.href = tipoAtual === 'cliente' ? '/cliente/login' : '/escritorio/login';
     }
     throw new Error((data && data.erro) || 'Sessão expirada. Faça login novamente.');
   }
@@ -119,6 +137,8 @@ function showAlert(elId, message, tipo = 'erro') {
   if (!el) return;
   el.textContent = message;
   el.className = 'alert-box show alert-' + tipo;
+  el.setAttribute('role', tipo === 'erro' ? 'alert' : 'status');
+  el.setAttribute('aria-live', tipo === 'erro' ? 'assertive' : 'polite');
 }
 
 function hideAlert(elId) {
@@ -135,9 +155,46 @@ function setLoading(buttonEl, isLoading, textoNormal, textoCarregando) {
     : textoNormal;
 }
 
+function garantirBackdropSidebar() {
+  let backdrop = document.getElementById('sidebarBackdrop');
+  if (!backdrop) {
+    backdrop = document.createElement('div');
+    backdrop.id = 'sidebarBackdrop';
+    backdrop.className = 'sidebar-backdrop';
+    backdrop.addEventListener('click', fecharSidebar);
+    document.body.appendChild(backdrop);
+  }
+  return backdrop;
+}
+function atualizarA11ySidebar(aberto) {
+  const btn = document.querySelector('.mobile-topbar button');
+  if (!btn) return;
+  btn.setAttribute('type', 'button');
+  btn.setAttribute('aria-controls', 'sidebarEl');
+  btn.setAttribute('aria-expanded', aberto ? 'true' : 'false');
+  btn.setAttribute('aria-label', aberto ? 'Fechar menu' : 'Abrir menu');
+}
+function abrirSidebar() {
+  const sb = document.querySelector('.sidebar');
+  if (!sb) return;
+  sb.classList.add('open');
+  garantirBackdropSidebar().classList.add('show');
+  document.body.classList.add('sidebar-open');
+  atualizarA11ySidebar(true);
+}
+function fecharSidebar() {
+  const sb = document.querySelector('.sidebar');
+  if (!sb) return;
+  sb.classList.remove('open');
+  const backdrop = document.getElementById('sidebarBackdrop');
+  if (backdrop) backdrop.classList.remove('show');
+  document.body.classList.remove('sidebar-open');
+  atualizarA11ySidebar(false);
+}
 function toggleSidebar() {
   const sb = document.querySelector('.sidebar');
-  if (sb) sb.classList.toggle('open');
+  if (!sb) return;
+  sb.classList.contains('open') ? fecharSidebar() : abrirSidebar();
 }
 
 function formatarTelefone(input) {
@@ -152,7 +209,21 @@ function marcarMenuAtivo() {
   });
 }
 
-document.addEventListener('DOMContentLoaded', marcarMenuAtivo);
+document.addEventListener('DOMContentLoaded', () => {
+  marcarMenuAtivo();
+  atualizarA11ySidebar(false);
+  document.querySelectorAll('.sidebar nav a').forEach(link => {
+    link.addEventListener('click', () => {
+      if (window.innerWidth <= 860) fecharSidebar();
+    });
+  });
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') fecharSidebar();
+});
+window.addEventListener('resize', () => {
+  if (window.innerWidth > 860) fecharSidebar();
+});
 
 /**
  * Lê um texto em voz alta (pt-BR), pensado para clientes idosos, analfabetos

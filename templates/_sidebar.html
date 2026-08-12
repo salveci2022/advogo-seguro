@@ -10,7 +10,8 @@
     <a href="/escritorio/contato-seguro" data-path="/escritorio/contato-seguro" class="{{ 'active' if active == 'contato_seguro' else '' }}"><span class="ic">🔐</span> Contato Seguro</a>
     <a href="/escritorio/relatorios" data-path="/escritorio/relatorios" class="{{ 'active' if active == 'relatorios' else '' }}"><span class="ic">📄</span> Relatórios</a>
     <a href="/escritorio/configuracoes" data-path="/escritorio/configuracoes" class="{{ 'active' if active == 'configuracoes' else '' }}"><span class="ic">⚙️</span> Configurações</a>
-    <a href="/static/planos.html" target="_blank" rel="noopener"><span class="ic">💳</span> Ver planos</a>
+    <a href="/planos" target="_blank" rel="noopener"><span class="ic">💳</span> Ver planos</a>
+    <a href="/privacidade" target="_blank" rel="noopener"><span class="ic">🔒</span> Privacidade / LGPD</a>
   </nav>
   <div class="logout-link">
     <a href="#" onclick="Auth.logout(); return false;"><span class="ic">🚪</span> Sair</a>
@@ -38,12 +39,9 @@
     const tag = document.getElementById('planoTag');
     if (!tag || typeof Auth === 'undefined') return;
 
-    const token = Auth.getToken();
-    if (!token) return;
-
     try {
       const resposta = await fetch('/api/escritorio/plano?ts=' + Date.now(), {
-        headers: { 'Authorization': 'Bearer ' + token },
+        credentials: 'same-origin',
         cache: 'no-store'
       });
 

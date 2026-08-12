@@ -9,15 +9,25 @@ Padrão de arquitetura: igual SAE Fácil / NEXORA / PANIFICA PRO 360
 
 import os
 import hashlib
+import hmac
+import json
 import logging
+import re
 import secrets
 import string
-from datetime import datetime, timedelta
+import smtplib
+import ssl
+import sqlite3
+from email.message import EmailMessage
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 
 from flask import Flask, request, jsonify, render_template, Response
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
+from sqlalchemy import event, inspect, text, func
+from sqlalchemy.orm import joinedload
+from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 from werkzeug.exceptions import HTTPException
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -32,6 +42,14 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
 import io as io_module
 
+
+APP_VERSION = os.environ.get('APP_VERSION', '1.0.0').strip() or '1.0.0'
+
+
+def agora_utc():
+    """UTC sem timezone para manter compatibilidade com colunas DateTime atuais."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
 # ──────────────────────────────────────────────
 # CONFIGURAÇÃO BASE
 # ──────────────────────────────────────────────
@@ -42,17 +60,18 @@ if not app.logger.handlers:
     logging.basicConfig(level=logging.INFO)
 app.logger.setLevel(logging.INFO)
 
-ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', '*')
-if ALLOWED_ORIGINS == '*':
-    CORS(app)  # modo aberto (dev). Em produção, defina ALLOWED_ORIGINS no .env
-else:
+IS_PRODUCTION = bool(os.environ.get('RENDER') or os.environ.get('FLASK_ENV') == 'production')
+
+# O frontend oficial usa a mesma origem da API. CORS fica fechado por padrão;
+# só é habilitado quando ALLOWED_ORIGINS é explicitamente configurado.
+ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', '').strip()
+if ALLOWED_ORIGINS:
     origins = [o.strip() for o in ALLOWED_ORIGINS.split(',') if o.strip()]
     CORS(app, origins=origins, supports_credentials=True)
 
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'troque-isso-em-producao')
 app.config['JWT_SECRET'] = os.environ.get('JWT_SECRET', 'troque-isso-tambem')
 
-IS_PRODUCTION = bool(os.environ.get('RENDER') or os.environ.get('FLASK_ENV') == 'production')
 if IS_PRODUCTION and (
     app.config['SECRET_KEY'] == 'troque-isso-em-producao' or
     app.config['JWT_SECRET'] == 'troque-isso-tambem'
@@ -62,18 +81,75 @@ if IS_PRODUCTION and (
         'Defina essas variáveis de ambiente antes de iniciar o servidor.'
     )
 
-DATABASE_URL = os.environ.get('DATABASE_URL', 'sqlite:///advogo_seguro.db')
+DATABASE_URL_ENV = os.environ.get('DATABASE_URL', '').strip()
+
+
+def _validar_database_url_infra(database_url, is_production):
+    """Impede que produção suba sem banco persistente configurado."""
+    url = (database_url or '').strip()
+    if not is_production:
+        return url or 'sqlite:///advogo_seguro.db'
+    if not url:
+        raise RuntimeError(
+            'DATABASE_URL não configurada em produção. '
+            'O ADVOGO SEGURO não inicia para evitar uso acidental de SQLite local.'
+        )
+    normalizada = url.lower()
+    if normalizada.startswith('sqlite:'):
+        raise RuntimeError(
+            'SQLite local não é permitido em produção. Configure PostgreSQL em DATABASE_URL.'
+        )
+    if not (
+        normalizada.startswith('postgresql://')
+        or normalizada.startswith('postgres://')
+    ):
+        raise RuntimeError('DATABASE_URL de produção deve apontar para PostgreSQL.')
+    return url
+
+
+DATABASE_URL = _validar_database_url_infra(DATABASE_URL_ENV, IS_PRODUCTION)
 if DATABASE_URL.startswith('postgres://'):
     DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'pool_pre_ping': True}
+
+@event.listens_for(Engine, 'connect')
+def _ativar_foreign_keys_sqlite(dbapi_connection, connection_record):
+    """Ativa integridade referencial em toda conexão SQLite."""
+    if isinstance(dbapi_connection, sqlite3.Connection):
+        cursor = dbapi_connection.cursor()
+        cursor.execute('PRAGMA foreign_keys=ON')
+        cursor.close()
 
 db = SQLAlchemy(app)
 
-ADMIN_SECRET = os.environ.get('ADMIN_SECRET', 'spynet2026admin')
-HOTMART_WEBHOOK_TOKEN = os.environ.get('HOTMART_WEBHOOK_TOKEN', '')
+ADMIN_SECRET = os.environ.get('ADMIN_SECRET', '').strip()
+HOTMART_WEBHOOK_TOKEN = os.environ.get('HOTMART_WEBHOOK_TOKEN', '').strip()
+HOTMART_PLAN_MAP_RAW = os.environ.get('HOTMART_PLAN_MAP', '').strip()
+COMMERCIAL_WHATSAPP = re.sub(r'\D', '', os.environ.get('COMMERCIAL_WHATSAPP', ''))
+COMMERCIAL_EMAIL = os.environ.get('COMMERCIAL_EMAIL', '').strip()
 RESET_TOKEN_TTL_MINUTOS = 30
 CONTATO_SEGURO_TTL_MINUTOS = int(os.environ.get('CONTATO_SEGURO_TTL_MINUTOS', '10'))
+JWT_TTL_HORAS = int(os.environ.get('JWT_TTL_HORAS', '12'))
+JWT_ISSUER = 'advogo-seguro'
+AUTH_COOKIE_NAME = 'advogo_seguro_auth'
+CSRF_COOKIE_NAME = 'advogo_seguro_csrf'
+SENHA_MIN_CARACTERES = int(os.environ.get('SENHA_MIN_CARACTERES', '10'))
+
+# Recuperação de senha por e-mail (SMTP genérico, sem dependência externa).
+SMTP_HOST = os.environ.get('SMTP_HOST', '').strip()
+SMTP_PORT = int(os.environ.get('SMTP_PORT', '587'))
+SMTP_USER = os.environ.get('SMTP_USER', '').strip()
+SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD', '')
+SMTP_FROM = os.environ.get('SMTP_FROM', SMTP_USER).strip()
+SMTP_SECURITY = os.environ.get('SMTP_SECURITY', 'tls').strip().lower()  # tls | ssl | none
+PUBLIC_BASE_URL = os.environ.get('PUBLIC_BASE_URL', '').strip().rstrip('/')
+
+PRIVACY_CONTACT_EMAIL = os.environ.get('PRIVACY_CONTACT_EMAIL', '').strip()
+LGPD_RETENCAO_LOGS_DIAS = int(os.environ.get('LGPD_RETENCAO_LOGS_DIAS', '0'))
+if LGPD_RETENCAO_LOGS_DIAS < 0:
+    raise RuntimeError('LGPD_RETENCAO_LOGS_DIAS não pode ser negativo.')
 
 
 # ──────────────────────────────────────────────
@@ -108,7 +184,7 @@ PLANOS_ADVOGO_SEGURO = {
     },
     'corporativo': {
         'nome': 'Corporativo',
-        'preco_mensal': 1997.00,
+        'preco_mensal': 1597.00,
         'implantacao': None,
         'limite_advogados': None,
     },
@@ -122,6 +198,40 @@ PLANOS_LEGADOS = {
 }
 
 
+PLANO_INATIVO = {
+    'nome': 'Plano Inativo',
+    'preco_mensal': None,
+    'implantacao': None,
+    'limite_advogados': 0,
+}
+
+
+def _carregar_mapa_hotmart(valor):
+    if not (valor or '').strip():
+        return {}
+    try:
+        bruto = json.loads(valor)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError('HOTMART_PLAN_MAP deve ser um JSON válido.') from exc
+    if not isinstance(bruto, dict):
+        raise RuntimeError('HOTMART_PLAN_MAP deve ser um objeto JSON.')
+    mapa = {}
+    for produto_id, codigo in bruto.items():
+        produto_id = str(produto_id).strip()
+        codigo = str(codigo).strip().lower()
+        codigo = PLANOS_LEGADOS.get(codigo, codigo)
+        if not produto_id or codigo not in PLANOS_ADVOGO_SEGURO or codigo == 'trial':
+            raise RuntimeError(
+                'HOTMART_PLAN_MAP contém produto/plano inválido. '
+                'Use apenas planos pagos do ADVOGO SEGURO.'
+            )
+        mapa[produto_id] = codigo
+    return mapa
+
+
+HOTMART_PLAN_MAP = _carregar_mapa_hotmart(HOTMART_PLAN_MAP_RAW)
+
+
 def normalizar_codigo_plano(codigo):
     codigo = (codigo or 'trial').strip().lower()
     return PLANOS_LEGADOS.get(codigo, codigo)
@@ -129,10 +239,9 @@ def normalizar_codigo_plano(codigo):
 
 def obter_config_plano(codigo):
     codigo_normalizado = normalizar_codigo_plano(codigo)
-    return codigo_normalizado, PLANOS_ADVOGO_SEGURO.get(
-        codigo_normalizado,
-        PLANOS_ADVOGO_SEGURO['trial']
-    )
+    if codigo_normalizado in PLANOS_ADVOGO_SEGURO:
+        return codigo_normalizado, PLANOS_ADVOGO_SEGURO[codigo_normalizado]
+    return codigo_normalizado, PLANO_INATIVO
 
 # Upload de foto do advogado (Sprint 3)
 UPLOAD_EXTENSOES_PERMITIDAS = {'jpg', 'jpeg', 'png', 'webp'}
@@ -164,6 +273,39 @@ def tratar_erro_inesperado(erro):
     return jsonify({'erro': 'Não foi possível concluir a operação. Tente novamente em instantes.'}), 500
 
 
+@app.after_request
+def aplicar_headers_seguranca(resposta):
+    # O projeto ainda possui scripts/estilos inline em templates legados;
+    # por isso a CSP mantém unsafe-inline temporariamente, mas fecha origens externas.
+    csp = (
+        "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; "
+        "form-action 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'"
+    )
+    resposta.headers['Content-Security-Policy'] = csp
+    resposta.headers['X-Frame-Options'] = 'DENY'
+    resposta.headers['X-Content-Type-Options'] = 'nosniff'
+    # Existem tokens em URLs de reset/link seguro; nunca os envie como Referer.
+    resposta.headers['Referrer-Policy'] = 'no-referrer'
+    resposta.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=(), payment=(), usb=()'
+    if IS_PRODUCTION:
+        resposta.headers['Strict-Transport-Security'] = 'max-age=31536000'
+    if request.path.startswith('/api/publico/foto-advogado/'):
+        # O token muda a cada nova foto; por isso a resposta pode ser cacheada sem
+        # risco de manter uma versão antiga após a substituição.
+        resposta.headers['Cache-Control'] = 'public, max-age=604800, immutable'
+    elif request.path.startswith('/api/') or request.path.startswith('/webhook/'):
+        resposta.headers['Cache-Control'] = 'no-store'
+    elif IS_PRODUCTION and request.path.startswith('/static/'):
+        # Arquivos de upload recebem nome único a cada troca, então podem ser
+        # cacheados por mais tempo. CSS/JS mantêm cache curto para permitir deploys.
+        if request.path.startswith('/static/uploads/'):
+            resposta.headers['Cache-Control'] = 'public, max-age=604800, immutable'
+        else:
+            resposta.headers['Cache-Control'] = 'public, max-age=3600'
+    return resposta
+
+
 # ──────────────────────────────────────────────
 # RATE LIMITING SIMPLES (proteção de login)
 # ──────────────────────────────────────────────
@@ -181,11 +323,24 @@ def _chave_rate_limit(identificador):
 
 
 def verificar_rate_limit(identificador):
-    """Retorna (permitido: bool, segundos_restantes: int)"""
+    """Retorna (permitido: bool, segundos_restantes: int)."""
     chave = _chave_rate_limit(identificador)
-    agora = datetime.utcnow().timestamp()
+    agora = agora_utc().timestamp()
     tentativas = [t for t in _tentativas_login.get(chave, []) if agora - t < JANELA_BLOQUEIO_SEGUNDOS]
-    _tentativas_login[chave] = tentativas
+    if tentativas:
+        _tentativas_login[chave] = tentativas
+    else:
+        _tentativas_login.pop(chave, None)
+
+    # Limpeza oportunista evita crescimento indefinido com identificadores únicos.
+    if len(_tentativas_login) > 1000:
+        for chave_antiga, valores in list(_tentativas_login.items()):
+            validas = [t for t in valores if agora - t < JANELA_BLOQUEIO_SEGUNDOS]
+            if validas:
+                _tentativas_login[chave_antiga] = validas
+            else:
+                _tentativas_login.pop(chave_antiga, None)
+
     if len(tentativas) >= MAX_TENTATIVAS:
         restante = int(JANELA_BLOQUEIO_SEGUNDOS - (agora - tentativas[0]))
         return False, max(restante, 1)
@@ -194,12 +349,35 @@ def verificar_rate_limit(identificador):
 
 def registrar_tentativa_falha(identificador):
     chave = _chave_rate_limit(identificador)
-    _tentativas_login.setdefault(chave, []).append(datetime.utcnow().timestamp())
+    _tentativas_login.setdefault(chave, []).append(agora_utc().timestamp())
 
 
 def limpar_tentativas(identificador):
     chave = _chave_rate_limit(identificador)
     _tentativas_login.pop(chave, None)
+
+
+_tentativas_acoes = {}
+
+def verificar_limite_acao(identificador, max_tentativas=5, janela_segundos=900):
+    """Rate limit simples para reset e rotas públicas sensíveis."""
+    chave = _chave_rate_limit(f'acao:{identificador}')
+    agora = agora_utc().timestamp()
+    valores = [t for t in _tentativas_acoes.get(chave, []) if agora - t < janela_segundos]
+    if len(valores) >= max_tentativas:
+        restante = int(janela_segundos - (agora - valores[0]))
+        _tentativas_acoes[chave] = valores
+        return False, max(restante, 1)
+    valores.append(agora)
+    _tentativas_acoes[chave] = valores
+    if len(_tentativas_acoes) > 2000:
+        for k, eventos in list(_tentativas_acoes.items()):
+            recentes = [t for t in eventos if agora - t < janela_segundos]
+            if recentes:
+                _tentativas_acoes[k] = recentes
+            else:
+                _tentativas_acoes.pop(k, None)
+    return True, 0
 
 
 # ──────────────────────────────────────────────
@@ -208,6 +386,9 @@ def limpar_tentativas(identificador):
 
 class Escritorio(db.Model):
     __tablename__ = 'escritorios'
+    __table_args__ = (
+        db.Index('ix_escritorios_reset_token', 'reset_token'),
+    )
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(200), nullable=False)
     cnpj = db.Column(db.String(20))
@@ -215,7 +396,7 @@ class Escritorio(db.Model):
     senha_hash = db.Column(db.String(200), nullable=False)
     plano = db.Column(db.String(20), default='trial')  # trial | pro | enterprise
     plano_expira = db.Column(db.DateTime)
-    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+    criado_em = db.Column(db.DateTime, default=agora_utc)
     reset_token = db.Column(db.String(100))
     reset_token_expira = db.Column(db.DateTime)
 
@@ -227,7 +408,7 @@ class Escritorio(db.Model):
         codigo_normalizado = normalizar_codigo_plano(codigo_original)
 
         if codigo_normalizado == 'trial':
-            return bool(self.plano_expira and self.plano_expira > datetime.utcnow())
+            return bool(self.plano_expira and self.plano_expira > agora_utc())
 
         if codigo_normalizado not in PLANOS_ADVOGO_SEGURO:
             return False
@@ -239,7 +420,7 @@ class Escritorio(db.Model):
 
         # Nos planos atuais, data vazia significa contrato sem vencimento
         # automático. Quando houver data, ela precisa estar no futuro.
-        return self.plano_expira is None or self.plano_expira > datetime.utcnow()
+        return self.plano_expira is None or self.plano_expira > agora_utc()
 
     def config_plano(self):
         return obter_config_plano(self.plano)
@@ -251,25 +432,38 @@ class Escritorio(db.Model):
 
 class Advogado(db.Model):
     __tablename__ = 'advogados'
+    __table_args__ = (
+        db.Index('ix_advogados_escritorio_ativo', 'escritorio_id', 'ativo'),
+        db.Index('ix_advogados_escritorio_oab', 'escritorio_id', 'oab'),
+    )
     id = db.Column(db.Integer, primary_key=True)
     escritorio_id = db.Column(db.Integer, db.ForeignKey('escritorios.id', ondelete='CASCADE'), nullable=False)
     nome = db.Column(db.String(200), nullable=False)
     oab = db.Column(db.String(30))
     telefone_oficial = db.Column(db.String(20), nullable=False)
+    # foto_url continua existindo por compatibilidade com URLs HTTPS e dados legados.
+    # Uploads feitos pelo sistema passam a ser persistidos no banco, evitando
+    # dependência do filesystem efêmero do serviço web.
     foto_url = db.Column(db.String(500))
+    foto_blob = db.Column(db.LargeBinary)
+    foto_mime = db.Column(db.String(50))
+    foto_token = db.Column(db.String(64), unique=True)
     ativo = db.Column(db.Boolean, default=True, nullable=False)
-    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+    criado_em = db.Column(db.DateTime, default=agora_utc)
 
 
 class Cliente(db.Model):
     __tablename__ = 'clientes'
+    __table_args__ = (
+        db.Index('ix_clientes_reset_token', 'reset_token'),
+    )
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(200), nullable=False)
-    telefone = db.Column(db.String(20), nullable=False)
+    telefone = db.Column(db.String(20), unique=True, nullable=False)
     email = db.Column(db.String(200))
     senha_hash = db.Column(db.String(200), nullable=False)
     ativo = db.Column(db.Boolean, default=True, nullable=False)
-    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+    criado_em = db.Column(db.DateTime, default=agora_utc)
     reset_token = db.Column(db.String(100))
     reset_token_expira = db.Column(db.DateTime)
 
@@ -278,6 +472,11 @@ class Cliente(db.Model):
 
 class Processo(db.Model):
     __tablename__ = 'processos'
+    __table_args__ = (
+        db.Index('ix_processos_escritorio_criado', 'escritorio_id', 'criado_em'),
+        db.Index('ix_processos_cliente_status', 'cliente_id', 'status'),
+        db.Index('ix_processos_advogado_escritorio', 'advogado_id', 'escritorio_id'),
+    )
     id = db.Column(db.Integer, primary_key=True)
     escritorio_id = db.Column(db.Integer, db.ForeignKey('escritorios.id', ondelete='CASCADE'), nullable=False)
     advogado_id = db.Column(db.Integer, db.ForeignKey('advogados.id', ondelete='CASCADE'), nullable=False)
@@ -286,7 +485,7 @@ class Processo(db.Model):
     numero_processo = db.Column(db.String(60))
     descricao = db.Column(db.String(300))
     status = db.Column(db.String(20), default='ativo')  # ativo | arquivado
-    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+    criado_em = db.Column(db.DateTime, default=agora_utc)
     token_cliente = db.Column(db.String(100), unique=True)  # link seguro sem login (Sprint 3)
 
     advogado = db.relationship('Advogado', backref='processos', lazy=True)
@@ -296,23 +495,29 @@ class Processo(db.Model):
 
 class Verificacao(db.Model):
     __tablename__ = 'verificacoes'
+    __table_args__ = (
+        db.Index('ix_verificacoes_cliente_criado', 'cliente_id', 'criado_em'),
+    )
     id = db.Column(db.Integer, primary_key=True)
     cliente_id = db.Column(db.Integer, db.ForeignKey('clientes.id', ondelete='CASCADE'), nullable=False)
     numero_consultado = db.Column(db.String(20), nullable=False)
     codigo_consultado = db.Column(db.String(12))
     resultado = db.Column(db.String(20))  # confirmado | nao_encontrado | numero_diferente
-    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+    criado_em = db.Column(db.DateTime, default=agora_utc)
 
 
 class TentativaContato(db.Model):
     __tablename__ = 'tentativas_contato'
+    __table_args__ = (
+        db.Index('ix_tentativas_processo_criado', 'processo_id', 'criado_em'),
+    )
     id = db.Column(db.Integer, primary_key=True)
     processo_id = db.Column(db.Integer, db.ForeignKey('processos.id', ondelete='CASCADE'), nullable=False)
     numero_suspeito = db.Column(db.String(20))
     canal = db.Column(db.String(30))  # whatsapp | ligacao | videochamada | email
     descricao = db.Column(db.String(500))
     confirmado_golpe = db.Column(db.Boolean, default=False)
-    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+    criado_em = db.Column(db.DateTime, default=agora_utc)
 
 
 class ContatoSeguro(db.Model):
@@ -324,6 +529,12 @@ class ContatoSeguro(db.Model):
     em canal separado, se existe um contato autorizado ativo no momento.
     """
     __tablename__ = 'contatos_seguros'
+    __table_args__ = (
+        db.Index('ix_contatos_escritorio_criado', 'escritorio_id', 'criado_em'),
+        db.Index('ix_contatos_cliente_status_expira', 'cliente_id', 'status', 'expira_em'),
+        db.Index('ix_contatos_processo_status_expira', 'processo_id', 'status', 'expira_em'),
+        db.Index('ix_contatos_advogado', 'advogado_id'),
+    )
     id = db.Column(db.Integer, primary_key=True)
     escritorio_id = db.Column(db.Integer, db.ForeignKey('escritorios.id', ondelete='CASCADE'), nullable=False)
     advogado_id = db.Column(db.Integer, db.ForeignKey('advogados.id', ondelete='CASCADE'), nullable=False)
@@ -336,7 +547,7 @@ class ContatoSeguro(db.Model):
     usado_em = db.Column(db.DateTime)
     cancelado_em = db.Column(db.DateTime)
     observacao = db.Column(db.String(300))
-    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+    criado_em = db.Column(db.DateTime, default=agora_utc)
 
     escritorio = db.relationship('Escritorio')
     advogado = db.relationship('Advogado')
@@ -348,7 +559,7 @@ class ContatoSeguro(db.Model):
         """Recalcula o status no momento da leitura, sem nunca tratar um código vencido como válido."""
         if self.status in ('cancelado', 'expirado'):
             return self.status
-        if self.expira_em < datetime.utcnow():
+        if self.expira_em < agora_utc():
             return 'expirado'
         return self.status
 
@@ -356,22 +567,63 @@ class ContatoSeguro(db.Model):
 class ContatoSeguroLog(db.Model):
     """Log de auditoria de toda consulta feita pelo cliente (mesmo quando não há contato ativo)."""
     __tablename__ = 'contatos_seguros_logs'
+    __table_args__ = (
+        db.Index('ix_contatos_logs_cliente_criado', 'cliente_id', 'criado_em'),
+        db.Index('ix_contatos_logs_contato', 'contato_seguro_id'),
+    )
     id = db.Column(db.Integer, primary_key=True)
     cliente_id = db.Column(db.Integer, db.ForeignKey('clientes.id', ondelete='CASCADE'), nullable=False)
     contato_seguro_id = db.Column(db.Integer, db.ForeignKey('contatos_seguros.id', ondelete='CASCADE'), nullable=True)
     encontrado_ativo = db.Column(db.Boolean, default=False)
     ip = db.Column(db.String(60))
-    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+    criado_em = db.Column(db.DateTime, default=agora_utc)
 
 
 class AcessoPublicoLog(db.Model):
     """Auditoria de acesso ao link público do cliente (/cliente/seguro/<token>) — Sprint 3."""
     __tablename__ = 'acessos_publicos_logs'
+    __table_args__ = (
+        db.Index('ix_acessos_processo_criado', 'processo_id', 'criado_em'),
+    )
     id = db.Column(db.Integer, primary_key=True)
     processo_id = db.Column(db.Integer, db.ForeignKey('processos.id', ondelete='CASCADE'), nullable=True)
     acao = db.Column(db.String(40))  # visualizou | verificou | alerta_pix | nao_reconheco
     ip = db.Column(db.String(60))
-    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+    criado_em = db.Column(db.DateTime, default=agora_utc)
+
+
+class SolicitacaoPrivacidade(db.Model):
+    """Fila auditável de solicitações de titulares sem copiar nome/e-mail/telefone."""
+    __tablename__ = 'solicitacoes_privacidade'
+    __table_args__ = (
+        db.Index('ix_privacidade_referencia_criado', 'referencia_titular', 'criado_em'),
+        db.Index('ix_privacidade_status_criado', 'status', 'criado_em'),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    referencia_titular = db.Column(db.String(64), nullable=False)
+    titular_tipo = db.Column(db.String(20), nullable=False)
+    tipo = db.Column(db.String(40), nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='recebida')
+    detalhes = db.Column(db.String(500))
+    criado_em = db.Column(db.DateTime, default=agora_utc, nullable=False)
+    atualizado_em = db.Column(db.DateTime, default=agora_utc, nullable=False)
+
+
+class EventoWebhook(db.Model):
+    """Idempotência de webhooks comerciais sem armazenar dados pessoais do comprador."""
+    __tablename__ = 'eventos_webhook'
+    __table_args__ = (
+        db.UniqueConstraint('provedor', 'event_id', name='uq_webhook_provedor_evento'),
+        db.Index('ix_webhook_provedor_criado', 'provedor', 'criado_em'),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    provedor = db.Column(db.String(30), nullable=False)
+    event_id = db.Column(db.String(120), nullable=False)
+    evento = db.Column(db.String(80), nullable=False)
+    produto_id = db.Column(db.String(120))
+    plano = db.Column(db.String(30))
+    resultado = db.Column(db.String(40), nullable=False, default='processado')
+    criado_em = db.Column(db.DateTime, default=agora_utc, nullable=False)
 
 
 # ──────────────────────────────────────────────
@@ -384,11 +636,13 @@ class AcessoPublicoLog(db.Model):
 # nenhuma operação destrutiva.
 
 def _garantir_colunas_novas():
-    from sqlalchemy import inspect, text
-
     inspetor = inspect(db.engine)
+    tipo_binario = 'BYTEA' if db.engine.dialect.name == 'postgresql' else 'BLOB'
     colunas_necessarias = [
         ('advogados', 'ativo', 'BOOLEAN NOT NULL DEFAULT TRUE'),
+        ('advogados', 'foto_blob', tipo_binario),
+        ('advogados', 'foto_mime', 'VARCHAR(50)'),
+        ('advogados', 'foto_token', 'VARCHAR(64)'),
         ('clientes', 'ativo', 'BOOLEAN NOT NULL DEFAULT TRUE'),
     ]
     for tabela, coluna, definicao_sql in colunas_necessarias:
@@ -400,6 +654,70 @@ def _garantir_colunas_novas():
         with db.engine.begin() as conexao:
             conexao.execute(text(f'ALTER TABLE {tabela} ADD COLUMN {coluna} {definicao_sql}'))
         print(f'[MIGRACAO] Coluna "{coluna}" adicionada em "{tabela}".')
+
+
+def _garantir_indices_banco():
+    """Cria índices idempotentes em bancos legados sem apagar ou reescrever dados."""
+    inspetor = inspect(db.engine)
+    indices = [
+        ('escritorios', 'ix_escritorios_reset_token', 'reset_token'),
+        ('advogados', 'ix_advogados_escritorio_ativo', 'escritorio_id, ativo'),
+        ('advogados', 'ix_advogados_escritorio_oab', 'escritorio_id, oab'),
+        ('clientes', 'ix_clientes_reset_token', 'reset_token'),
+        ('processos', 'ix_processos_escritorio_criado', 'escritorio_id, criado_em'),
+        ('processos', 'ix_processos_cliente_status', 'cliente_id, status'),
+        ('processos', 'ix_processos_advogado_escritorio', 'advogado_id, escritorio_id'),
+        ('verificacoes', 'ix_verificacoes_cliente_criado', 'cliente_id, criado_em'),
+        ('tentativas_contato', 'ix_tentativas_processo_criado', 'processo_id, criado_em'),
+        ('contatos_seguros', 'ix_contatos_escritorio_criado', 'escritorio_id, criado_em'),
+        ('contatos_seguros', 'ix_contatos_cliente_status_expira', 'cliente_id, status, expira_em'),
+        ('contatos_seguros', 'ix_contatos_processo_status_expira', 'processo_id, status, expira_em'),
+        ('contatos_seguros', 'ix_contatos_advogado', 'advogado_id'),
+        ('contatos_seguros_logs', 'ix_contatos_logs_cliente_criado', 'cliente_id, criado_em'),
+        ('contatos_seguros_logs', 'ix_contatos_logs_contato', 'contato_seguro_id'),
+        ('acessos_publicos_logs', 'ix_acessos_processo_criado', 'processo_id, criado_em'),
+        ('solicitacoes_privacidade', 'ix_privacidade_referencia_criado', 'referencia_titular, criado_em'),
+        ('solicitacoes_privacidade', 'ix_privacidade_status_criado', 'status, criado_em'),
+        ('eventos_webhook', 'ix_webhook_provedor_criado', 'provedor, criado_em'),
+    ]
+    with db.engine.begin() as conexao:
+        for tabela, nome, colunas in indices:
+            if inspetor.has_table(tabela):
+                conexao.execute(text(f'CREATE INDEX IF NOT EXISTS "{nome}" ON "{tabela}" ({colunas})'))
+
+        if inspetor.has_table('advogados'):
+            conexao.execute(text(
+                'CREATE UNIQUE INDEX IF NOT EXISTS ux_advogados_foto_token ON advogados (foto_token)'
+            ))
+
+        if inspetor.has_table('clientes'):
+            duplicados = conexao.execute(text(
+                'SELECT COUNT(*) FROM ('
+                'SELECT telefone FROM clientes WHERE telefone IS NOT NULL '
+                'GROUP BY telefone HAVING COUNT(*) > 1'
+                ') AS duplicados'
+            )).scalar() or 0
+            if duplicados == 0:
+                conexao.execute(text(
+                    'CREATE UNIQUE INDEX IF NOT EXISTS ux_clientes_telefone ON clientes (telefone)'
+                ))
+            else:
+                app.logger.error(
+                    '[BANCO] Existem %s telefone(s) duplicado(s) em clientes; '
+                    'o índice único não foi criado. Corrija as duplicidades antes do deploy.',
+                    duplicados,
+                )
+
+
+def _verificar_integridade_banco_local():
+    """Falha cedo se um SQLite local tiver corrupção física ou referências órfãs."""
+    if db.engine.dialect.name != 'sqlite':
+        return
+    with db.engine.connect() as conexao:
+        integridade = conexao.execute(text('PRAGMA integrity_check')).scalar()
+        orfaos = conexao.execute(text('PRAGMA foreign_key_check')).fetchall()
+    if integridade != 'ok' or orfaos:
+        raise RuntimeError('Banco SQLite falhou na verificação de integridade/referências.')
 
 
 # ──────────────────────────────────────────────
@@ -505,7 +823,18 @@ def verificar_senha(senha_hash_salva, senha_digitada):
 
 
 def gerar_token_reset():
-    return secrets.token_urlsafe(32)
+    """Retorna (token_bruto, token_hash). Apenas o hash é persistido no banco."""
+    token = secrets.token_urlsafe(32)
+    return token, hashlib.sha256(token.encode('utf-8')).hexdigest()
+
+
+def hash_token_reset(token):
+    return hashlib.sha256((token or '').encode('utf-8')).hexdigest()
+
+
+def _versao_credencial(senha_hash):
+    """Vincula o JWT ao hash atual da senha; trocar senha revoga tokens antigos."""
+    return hashlib.sha256((senha_hash or '').encode('utf-8')).hexdigest()[:24]
 
 
 def gerar_codigo_cca():
@@ -524,31 +853,99 @@ def gerar_codigo_unico():
             return codigo
 
 
-def gerar_token(payload, dias=30):
+def gerar_token(payload, senha_hash, horas=None):
     payload = dict(payload)
-    payload['exp'] = datetime.utcnow() + timedelta(days=dias)
-    return jwt.encode(payload, app.config['JWT_SECRET'], algorithm='HS256')
+    agora = agora_utc()
+    csrf = secrets.token_urlsafe(24)
+    payload.update({
+        'iat': agora,
+        'exp': agora + timedelta(hours=horas or JWT_TTL_HORAS),
+        'iss': JWT_ISSUER,
+        'csrf': csrf,
+        'cv': _versao_credencial(senha_hash),
+    })
+    token = jwt.encode(payload, app.config['JWT_SECRET'], algorithm='HS256')
+    return token, csrf
 
 
 def decodificar_token(token):
     try:
-        return jwt.decode(token, app.config['JWT_SECRET'], algorithms=['HS256'])
+        return jwt.decode(
+            token,
+            app.config['JWT_SECRET'],
+            algorithms=['HS256'],
+            issuer=JWT_ISSUER,
+            options={'require': ['exp', 'iat', 'iss', 'id', 'tipo', 'csrf', 'cv']}
+        )
     except Exception:
         return None
+
+
+def _token_da_requisicao():
+    auth = request.headers.get('Authorization', '')
+    if auth.startswith('Bearer '):
+        token_bearer = auth[7:].strip()
+        if token_bearer:
+            return token_bearer, 'bearer'
+    token_cookie = request.cookies.get(AUTH_COOKIE_NAME, '')
+    if token_cookie:
+        return token_cookie, 'cookie'
+    return None, None
+
+
+def _csrf_valido(dados, origem_token):
+    if request.method in ('GET', 'HEAD', 'OPTIONS') or origem_token != 'cookie':
+        return True
+    esperado = str(dados.get('csrf') or '')
+    cabecalho = request.headers.get('X-CSRF-Token', '')
+    cookie = request.cookies.get(CSRF_COOKIE_NAME, '')
+    return bool(esperado and cabecalho and cookie and
+                hmac.compare_digest(esperado, cabecalho) and
+                hmac.compare_digest(esperado, cookie))
+
+
+def _resposta_com_sessao(dados_resposta, payload_jwt, senha_hash):
+    token, csrf = gerar_token(payload_jwt, senha_hash)
+    dados = dict(dados_resposta)
+    # Compatibilidade para testes e integrações locais. Em produção o JWT nunca
+    # é entregue ao JavaScript; fica somente em cookie HttpOnly.
+    if not IS_PRODUCTION:
+        dados['token'] = token
+    resposta = jsonify(dados)
+    max_age = JWT_TTL_HORAS * 3600
+    resposta.set_cookie(
+        AUTH_COOKIE_NAME, token, max_age=max_age, httponly=True,
+        secure=IS_PRODUCTION, samesite='Strict', path='/'
+    )
+    resposta.set_cookie(
+        CSRF_COOKIE_NAME, csrf, max_age=max_age, httponly=False,
+        secure=IS_PRODUCTION, samesite='Strict', path='/'
+    )
+    return resposta
+
+
+def _limpar_cookies_sessao(resposta):
+    resposta.delete_cookie(AUTH_COOKIE_NAME, path='/', secure=IS_PRODUCTION, samesite='Strict')
+    resposta.delete_cookie(CSRF_COOKIE_NAME, path='/', secure=IS_PRODUCTION, samesite='Strict')
+    return resposta
 
 
 def login_escritorio_obrigatorio(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
-        auth = request.headers.get('Authorization', '')
-        token = auth.replace('Bearer ', '') if auth.startswith('Bearer ') else None
+        token, origem = _token_da_requisicao()
         dados = decodificar_token(token) if token else None
         if not dados or dados.get('tipo') != 'escritorio':
             return jsonify({'erro': 'Não autenticado'}), 401
-        escritorio = Escritorio.query.get(dados['id'])
+        escritorio = db.session.get(Escritorio, dados['id'])
         if not escritorio:
             return jsonify({'erro': 'Escritório não encontrado'}), 404
+        if not hmac.compare_digest(str(dados.get('cv') or ''), _versao_credencial(escritorio.senha_hash)):
+            return jsonify({'erro': 'Sessão expirada. Faça login novamente.'}), 401
+        if not _csrf_valido(dados, origem):
+            return jsonify({'erro': 'Requisição de segurança inválida. Atualize a página e tente novamente.'}), 403
         request.escritorio = escritorio
+        request.auth_dados = dados
         return f(*args, **kwargs)
     return wrapper
 
@@ -556,30 +953,89 @@ def login_escritorio_obrigatorio(f):
 def login_cliente_obrigatorio(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
-        auth = request.headers.get('Authorization', '')
-        token = auth.replace('Bearer ', '') if auth.startswith('Bearer ') else None
+        token, origem = _token_da_requisicao()
         dados = decodificar_token(token) if token else None
         if not dados or dados.get('tipo') != 'cliente':
             return jsonify({'erro': 'Não autenticado'}), 401
-        cliente = Cliente.query.get(dados['id'])
+        cliente = db.session.get(Cliente, dados['id'])
         if not cliente:
             return jsonify({'erro': 'Cliente não encontrado'}), 404
+        if not hmac.compare_digest(str(dados.get('cv') or ''), _versao_credencial(cliente.senha_hash)):
+            return jsonify({'erro': 'Sessão expirada. Faça login novamente.'}), 401
+        if not _csrf_valido(dados, origem):
+            return jsonify({'erro': 'Requisição de segurança inválida. Atualize a página e tente novamente.'}), 403
         request.cliente = cliente
+        request.auth_dados = dados
         return f(*args, **kwargs)
     return wrapper
+
+
+def _base_url_publica():
+    if PUBLIC_BASE_URL:
+        return PUBLIC_BASE_URL
+    if IS_PRODUCTION:
+        return ''
+    return request.host_url.rstrip('/')
+
+
+def _smtp_configurado():
+    return bool(SMTP_HOST and SMTP_PORT and SMTP_FROM)
+
+
+def enviar_email_redefinicao_escritorio(destinatario, link_absoluto):
+    """Envia o link de redefinição. Retorna True quando o SMTP aceitou a mensagem."""
+    if not _smtp_configurado():
+        return False
+
+    mensagem = EmailMessage()
+    mensagem['Subject'] = 'ADVOGO SEGURO — redefinição de senha'
+    mensagem['From'] = SMTP_FROM
+    mensagem['To'] = destinatario
+    mensagem.set_content(
+        'Recebemos uma solicitação para redefinir a senha do seu escritório no ADVOGO SEGURO.\n\n'
+        f'Acesse o link abaixo. Ele expira em {RESET_TOKEN_TTL_MINUTOS} minutos:\n{link_absoluto}\n\n'
+        'Se você não solicitou a redefinição, ignore esta mensagem.'
+    )
+
+    contexto_ssl = ssl.create_default_context()
+    if SMTP_SECURITY == 'ssl':
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=15, context=contexto_ssl) as servidor:
+            if SMTP_USER:
+                servidor.login(SMTP_USER, SMTP_PASSWORD)
+            servidor.send_message(mensagem)
+    else:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as servidor:
+            servidor.ehlo()
+            if SMTP_SECURITY == 'tls':
+                servidor.starttls(context=contexto_ssl)
+                servidor.ehlo()
+            if SMTP_USER:
+                servidor.login(SMTP_USER, SMTP_PASSWORD)
+            servidor.send_message(mensagem)
+    return True
+
+
+@app.route('/api/logout', methods=['POST'])
+def logout_api():
+    token, origem = _token_da_requisicao()
+    dados = decodificar_token(token) if token else None
+    if origem == 'cookie' and dados and not _csrf_valido(dados, origem):
+        return jsonify({'erro': 'Requisição de segurança inválida.'}), 403
+    resposta = jsonify({'ok': True})
+    return _limpar_cookies_sessao(resposta)
 
 
 @app.route('/api/escritorio/senha', methods=['POST'])
 @login_escritorio_obrigatorio
 def trocar_senha_escritorio():
     data = request.get_json() or {}
-    senha_atual = data.get('senha_atual', '')
-    nova_senha = data.get('nova_senha', '')
+    senha_atual = data.get('senha_atual') or ''
+    nova_senha = data.get('nova_senha') or ''
 
     if not verificar_senha(request.escritorio.senha_hash, senha_atual):
         return jsonify({'erro': 'Senha atual incorreta'}), 401
-    if len(nova_senha) < 6:
-        return jsonify({'erro': 'A nova senha deve ter no mínimo 6 caracteres'}), 400
+    if len(nova_senha) < SENHA_MIN_CARACTERES:
+        return jsonify({'erro': f'A nova senha deve ter no mínimo {SENHA_MIN_CARACTERES} caracteres'}), 400
 
     request.escritorio.senha_hash = hash_senha(nova_senha)
     db.session.commit()
@@ -589,20 +1045,56 @@ def trocar_senha_escritorio():
 @app.route('/api/escritorio/esqueci-senha', methods=['POST'])
 def esqueci_senha_escritorio():
     data = request.get_json() or {}
-    email = data.get('email', '').strip().lower()
+    email = (data.get('email') or '').strip().lower()
+    permitido, espera = verificar_limite_acao(f'reset-escritorio:{email or "vazio"}', 5, 900)
+    if not permitido:
+        return jsonify({'erro': f'Muitas solicitações. Tente novamente em {espera} segundos.'}), 429
+
+    # Se o serviço de e-mail não estiver configurado, a indisponibilidade é
+    # igual para qualquer endereço e não revela se uma conta existe.
+    if IS_PRODUCTION and not _smtp_configurado():
+        app.logger.error('Recuperação de senha indisponível: SMTP não configurado em produção.')
+        return jsonify({
+            'erro': 'A recuperação de senha por e-mail está temporariamente indisponível. '
+                    'Entre em contato com o suporte SPYNET.'
+        }), 503
+    if IS_PRODUCTION and not PUBLIC_BASE_URL:
+        app.logger.error('Recuperação de senha indisponível: PUBLIC_BASE_URL não configurada em produção.')
+        return jsonify({
+            'erro': 'A recuperação de senha por e-mail está temporariamente indisponível. '
+                    'Entre em contato com o suporte SPYNET.'
+        }), 503
+
     escritorio = Escritorio.query.filter_by(email=email).first()
 
-    # Resposta genérica sempre (não revela se o e-mail existe, por segurança)
-    resposta = {'ok': True, 'mensagem': 'Se o e-mail existir em nossa base, um link de redefinição foi enviado.'}
+    # Resposta genérica: não revela se o e-mail existe.
+    resposta = {
+        'ok': True,
+        'mensagem': 'Se o e-mail existir em nossa base, um link de redefinição será enviado.'
+    }
 
     if escritorio:
-        escritorio.reset_token = gerar_token_reset()
-        escritorio.reset_token_expira = datetime.utcnow() + timedelta(minutes=RESET_TOKEN_TTL_MINUTOS)
+        token_bruto, token_hash = gerar_token_reset()
+        escritorio.reset_token = token_hash
+        escritorio.reset_token_expira = agora_utc() + timedelta(minutes=RESET_TOKEN_TTL_MINUTOS)
         db.session.commit()
-        # TODO: integrar envio real por e-mail (SMTP/SendGrid). Por enquanto,
-        # o link pode ser obtido pelo admin em /api/admin/reset-links/<secret>/<email>
-        link = f"/redefinir-senha?tipo=escritorio&token={escritorio.reset_token}"
-        resposta['link_dev'] = link  # ⚠️ remover este campo quando o envio por e-mail estiver configurado
+
+        caminho = f'/redefinir-senha?tipo=escritorio&token={token_bruto}'
+        base_publica = _base_url_publica()
+        if IS_PRODUCTION and not base_publica:
+            app.logger.error('PUBLIC_BASE_URL não configurada em produção; reset por e-mail bloqueado.')
+            return jsonify({'erro': 'A recuperação de senha está temporariamente indisponível. Entre em contato com o suporte SPYNET.'}), 503
+        link_absoluto = f'{base_publica}{caminho}'
+
+        enviado = False
+        try:
+            enviado = enviar_email_redefinicao_escritorio(escritorio.email, link_absoluto)
+        except Exception as erro:
+            app.logger.exception('Falha ao enviar e-mail de redefinição para escritório %s: %s', escritorio.id, erro)
+
+        # Ajuda apenas no desenvolvimento local. Nunca expõe o token em produção.
+        if not IS_PRODUCTION and not enviado:
+            resposta['link_dev'] = caminho
 
     return jsonify(resposta)
 
@@ -611,13 +1103,13 @@ def esqueci_senha_escritorio():
 def redefinir_senha_escritorio():
     data = request.get_json() or {}
     token = data.get('token', '')
-    nova_senha = data.get('nova_senha', '')
+    nova_senha = data.get('nova_senha') or ''
 
-    escritorio = Escritorio.query.filter_by(reset_token=token).first()
-    if not escritorio or not escritorio.reset_token_expira or escritorio.reset_token_expira < datetime.utcnow():
+    escritorio = Escritorio.query.filter_by(reset_token=hash_token_reset(token)).first()
+    if not escritorio or not escritorio.reset_token_expira or escritorio.reset_token_expira < agora_utc():
         return jsonify({'erro': 'Link de redefinição inválido ou expirado. Solicite um novo.'}), 400
-    if len(nova_senha) < 6:
-        return jsonify({'erro': 'A nova senha deve ter no mínimo 6 caracteres'}), 400
+    if len(nova_senha) < SENHA_MIN_CARACTERES:
+        return jsonify({'erro': f'A nova senha deve ter no mínimo {SENHA_MIN_CARACTERES} caracteres'}), 400
 
     escritorio.senha_hash = hash_senha(nova_senha)
     escritorio.reset_token = None
@@ -630,13 +1122,13 @@ def redefinir_senha_escritorio():
 @login_cliente_obrigatorio
 def trocar_senha_cliente():
     data = request.get_json() or {}
-    senha_atual = data.get('senha_atual', '')
-    nova_senha = data.get('nova_senha', '')
+    senha_atual = data.get('senha_atual') or ''
+    nova_senha = data.get('nova_senha') or ''
 
     if not verificar_senha(request.cliente.senha_hash, senha_atual):
         return jsonify({'erro': 'Senha atual incorreta'}), 401
-    if len(nova_senha) < 6:
-        return jsonify({'erro': 'A nova senha deve ter no mínimo 6 caracteres'}), 400
+    if len(nova_senha) < SENHA_MIN_CARACTERES:
+        return jsonify({'erro': f'A nova senha deve ter no mínimo {SENHA_MIN_CARACTERES} caracteres'}), 400
 
     request.cliente.senha_hash = hash_senha(nova_senha)
     db.session.commit()
@@ -652,15 +1144,15 @@ def esqueci_senha_cliente():
     ser plugada depois em envio_whatsapp_reset().
     """
     data = request.get_json() or {}
-    telefone = ''.join(filter(str.isdigit, data.get('telefone', '')))
+    telefone = ''.join(filter(str.isdigit, (data.get('telefone') or ''))) 
+    permitido, espera = verificar_limite_acao(f'reset-cliente:{telefone or "vazio"}', 5, 900)
+    if not permitido:
+        return jsonify({'erro': f'Muitas solicitações. Tente novamente em {espera} segundos.'}), 429
+
     cliente = Cliente.query.filter_by(telefone=telefone).first()
-
-    resposta = {'ok': True, 'mensagem': 'Se o telefone existir em nossa base, o escritório responsável poderá te enviar um novo acesso.'}
-    if cliente:
-        cliente.reset_token = gerar_token_reset()
-        cliente.reset_token_expira = datetime.utcnow() + timedelta(minutes=RESET_TOKEN_TTL_MINUTOS)
-        db.session.commit()
-
+    resposta = {'ok': True, 'mensagem': 'Se o telefone existir em nossa base, solicite ao escritório responsável um novo link de acesso.'}
+    # O link só é gerado por um escritório autenticado. Não criamos aqui um
+    # token secreto que ninguém consegue entregar ao titular.
     return jsonify(resposta)
 
 
@@ -668,13 +1160,13 @@ def esqueci_senha_cliente():
 def redefinir_senha_cliente():
     data = request.get_json() or {}
     token = data.get('token', '')
-    nova_senha = data.get('nova_senha', '')
+    nova_senha = data.get('nova_senha') or ''
 
-    cliente = Cliente.query.filter_by(reset_token=token).first()
-    if not cliente or not cliente.reset_token_expira or cliente.reset_token_expira < datetime.utcnow():
+    cliente = Cliente.query.filter_by(reset_token=hash_token_reset(token)).first()
+    if not cliente or not cliente.reset_token_expira or cliente.reset_token_expira < agora_utc():
         return jsonify({'erro': 'Link de redefinição inválido ou expirado. Solicite um novo ao seu escritório.'}), 400
-    if len(nova_senha) < 6:
-        return jsonify({'erro': 'A nova senha deve ter no mínimo 6 caracteres'}), 400
+    if len(nova_senha) < SENHA_MIN_CARACTERES:
+        return jsonify({'erro': f'A nova senha deve ter no mínimo {SENHA_MIN_CARACTERES} caracteres'}), 400
 
     cliente.senha_hash = hash_senha(nova_senha)
     cliente.reset_token = None
@@ -683,7 +1175,7 @@ def redefinir_senha_cliente():
     return jsonify({'ok': True, 'mensagem': 'Senha redefinida com sucesso. Faça login com a nova senha.'})
 
 
-@app.route('/api/escritorio/cliente/<int:cliente_id>/link-reset', methods=['GET'])
+@app.route('/api/escritorio/cliente/<int:cliente_id>/link-reset', methods=['POST'])
 @login_escritorio_obrigatorio
 def gerar_link_reset_cliente(cliente_id):
     """Permite ao escritório gerar/copiar um link de redefinição para reenviar ao cliente por WhatsApp."""
@@ -692,11 +1184,17 @@ def gerar_link_reset_cliente(cliente_id):
         return jsonify({'erro': 'Cliente não encontrado neste escritório'}), 404
 
     cliente = processo.cliente
-    cliente.reset_token = gerar_token_reset()
-    cliente.reset_token_expira = datetime.utcnow() + timedelta(minutes=RESET_TOKEN_TTL_MINUTOS)
+    if _cliente_possui_processos_de_outro_escritorio(cliente.id, request.escritorio.id):
+        return jsonify({
+            'erro': 'Este cliente está vinculado a mais de um escritório. Por segurança, a redefinição de senha deve ser tratada pelo suporte.'
+        }), 409
+
+    token_bruto, token_hash = gerar_token_reset()
+    cliente.reset_token = token_hash
+    cliente.reset_token_expira = agora_utc() + timedelta(minutes=RESET_TOKEN_TTL_MINUTOS)
     db.session.commit()
 
-    return jsonify({'link': f"/redefinir-senha?tipo=cliente&token={cliente.reset_token}", 'cliente_nome': cliente.nome})
+    return jsonify({'link': f"/redefinir-senha?tipo=cliente&token={token_bruto}", 'cliente_nome': cliente.nome})
 
 
 # ──────────────────────────────────────────────
@@ -706,13 +1204,13 @@ def gerar_link_reset_cliente(cliente_id):
 @app.route('/api/escritorio/registro', methods=['POST'])
 def registro_escritorio():
     data = request.get_json() or {}
-    nome = data.get('nome', '').strip()
-    email = data.get('email', '').strip().lower()
-    senha = data.get('senha', '')
-    cnpj = data.get('cnpj', '').strip()
+    nome = (data.get('nome') or '').strip()
+    email = (data.get('email') or '').strip().lower()
+    senha = data.get('senha') or ''
+    cnpj = (data.get('cnpj') or '').strip()
 
-    if not nome or not email or len(senha) < 6:
-        return jsonify({'erro': 'Preencha nome, email e senha (mín. 6 caracteres)'}), 400
+    if not nome or not email or len(senha) < SENHA_MIN_CARACTERES:
+        return jsonify({'erro': f'Preencha nome, email e senha (mín. {SENHA_MIN_CARACTERES} caracteres)'}), 400
 
     if Escritorio.query.filter_by(email=email).first():
         return jsonify({'erro': 'Email já cadastrado'}), 409
@@ -721,23 +1219,22 @@ def registro_escritorio():
         nome=nome, email=email, cnpj=cnpj,
         senha_hash=hash_senha(senha),
         plano='trial',
-        plano_expira=datetime.utcnow() + timedelta(days=7)
+        plano_expira=agora_utc() + timedelta(days=7)
     )
     db.session.add(escritorio)
     db.session.commit()
 
-    token = gerar_token({'id': escritorio.id, 'tipo': 'escritorio'})
-    return jsonify({
-        'token': token, 'nome': escritorio.nome,
+    return _resposta_com_sessao({
+        'nome': escritorio.nome,
         'plano': escritorio.plano, 'plano_ativo': escritorio.plano_ativo()
-    })
+    }, {'id': escritorio.id, 'tipo': 'escritorio'}, escritorio.senha_hash)
 
 
 @app.route('/api/escritorio/login', methods=['POST'])
 def login_escritorio():
     data = request.get_json() or {}
-    email = data.get('email', '').strip().lower()
-    senha = data.get('senha', '')
+    email = (data.get('email') or '').strip().lower()
+    senha = data.get('senha') or ''
 
     permitido, espera = verificar_rate_limit(email)
     if not permitido:
@@ -754,11 +1251,10 @@ def login_escritorio():
         escritorio.senha_hash = hash_senha(senha)
         db.session.commit()
 
-    token = gerar_token({'id': escritorio.id, 'tipo': 'escritorio'})
-    return jsonify({
-        'token': token, 'nome': escritorio.nome,
+    return _resposta_com_sessao({
+        'nome': escritorio.nome,
         'plano': escritorio.plano, 'plano_ativo': escritorio.plano_ativo()
-    })
+    }, {'id': escritorio.id, 'tipo': 'escritorio'}, escritorio.senha_hash)
 
 
 @app.route('/api/escritorio/plano', methods=['GET'])
@@ -834,17 +1330,20 @@ def advogados():
             }), 403
 
         data = request.get_json() or {}
-        nome = data.get('nome', '').strip()
-        telefone = data.get('telefone_oficial', '').strip()
+        nome = (data.get('nome') or '').strip()
+        telefone = (data.get('telefone_oficial') or '').strip()
         if not nome or not telefone:
             return jsonify({'erro': 'Informe o nome e o telefone oficial do advogado.'}), 400
 
+        foto_url = (data.get('foto_url') or '').strip()
+        if not _url_foto_permitida(foto_url):
+            return jsonify({'erro': 'URL de foto inválida. Use HTTPS ou envie a imagem pelo sistema.'}), 400
         adv = Advogado(
             escritorio_id=request.escritorio.id,
             nome=nome,
-            oab=data.get('oab', '').strip(),
+            oab=(data.get('oab') or '').strip(),
             telefone_oficial=telefone,
-            foto_url=data.get('foto_url', '')
+            foto_url=foto_url
         )
         db.session.add(adv)
         db.session.commit()
@@ -853,7 +1352,7 @@ def advogados():
     lista = Advogado.query.filter_by(escritorio_id=request.escritorio.id).all()
     return jsonify([{
         'id': a.id, 'nome': a.nome, 'oab': a.oab,
-        'telefone_oficial': a.telefone_oficial, 'foto_url': a.foto_url,
+        'telefone_oficial': a.telefone_oficial, 'foto_url': _url_foto_banco(a),
         'ativo': a.ativo
     } for a in lista])
 
@@ -879,10 +1378,30 @@ def advogado_detalhe(advogado_id):
         return jsonify({'ok': True})
 
     data = request.get_json() or {}
-    adv.nome = data.get('nome', adv.nome).strip()
-    adv.oab = data.get('oab', adv.oab)
-    adv.telefone_oficial = data.get('telefone_oficial', adv.telefone_oficial).strip()
-    adv.foto_url = data.get('foto_url', adv.foto_url)
+    if 'nome' in data:
+        if not isinstance(data['nome'], str) or not data['nome'].strip():
+            return jsonify({'erro': 'Nome do advogado inválido.'}), 400
+        adv.nome = data['nome'].strip()
+    if 'oab' in data:
+        if data['oab'] is not None and not isinstance(data['oab'], str):
+            return jsonify({'erro': 'OAB inválida.'}), 400
+        adv.oab = (data['oab'] or '').strip()
+    if 'telefone_oficial' in data:
+        if not isinstance(data['telefone_oficial'], str) or not data['telefone_oficial'].strip():
+            return jsonify({'erro': 'Telefone oficial inválido.'}), 400
+        adv.telefone_oficial = data['telefone_oficial'].strip()
+    if 'foto_url' in data:
+        if data['foto_url'] is not None and not isinstance(data['foto_url'], str):
+            return jsonify({'erro': 'URL da foto inválida.'}), 400
+        foto_url = (data['foto_url'] or '').strip()
+        foto_interna_atual = _url_foto_banco(adv) if adv.foto_blob and adv.foto_token else None
+        if foto_interna_atual and foto_url == foto_interna_atual:
+            pass  # edição normal do cadastro não apaga a foto persistida
+        else:
+            if not _url_foto_permitida(foto_url):
+                return jsonify({'erro': 'URL de foto inválida. Use HTTPS ou envie a imagem pelo sistema.'}), 400
+            adv.foto_url = foto_url
+            _limpar_foto_banco(adv)
     db.session.commit()
     return jsonify({'id': adv.id, 'nome': adv.nome})
 
@@ -948,10 +1467,115 @@ def _extensao_permitida(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in UPLOAD_EXTENSOES_PERMITIDAS
 
 
+def _conteudo_imagem_compativel(arquivo, extensao):
+    """Valida assinatura binária básica; não confia só no nome/extensão."""
+    cabecalho = arquivo.stream.read(16)
+    arquivo.stream.seek(0)
+    if extensao in ('jpg', 'jpeg'):
+        return cabecalho.startswith(b'\xff\xd8\xff')
+    if extensao == 'png':
+        return cabecalho.startswith(b'\x89PNG\r\n\x1a\n')
+    if extensao == 'webp':
+        return len(cabecalho) >= 12 and cabecalho[:4] == b'RIFF' and cabecalho[8:12] == b'WEBP'
+    return False
+
+
+def _url_foto_permitida(url):
+    url = (url or '').strip()
+    if not url:
+        return True
+    return url.startswith('/static/uploads/advogados/') or url.startswith('https://')
+
+
+def _mime_foto_por_extensao(extensao):
+    extensao = (extensao or '').lower()
+    return {
+        'jpg': 'image/jpeg',
+        'jpeg': 'image/jpeg',
+        'png': 'image/png',
+        'webp': 'image/webp',
+    }.get(extensao)
+
+
+def _url_foto_banco(advogado):
+    if advogado and advogado.foto_token and advogado.foto_blob:
+        return f'/api/publico/foto-advogado/{advogado.foto_token}'
+    return advogado.foto_url if advogado else None
+
+
+def _limpar_foto_banco(advogado):
+    advogado.foto_blob = None
+    advogado.foto_mime = None
+    advogado.foto_token = None
+
+
+def _migrar_fotos_legadas_local_para_banco():
+    """Migra fotos locais legadas quando o arquivo ainda existe no host.
+
+    É melhor-esforço e nunca impede o startup: um deploy novo pode não receber
+    arquivos antigos de um filesystem efêmero. Nesse caso, o usuário apenas
+    precisará reenviar a foto uma vez pela interface.
+    """
+    inspetor = inspect(db.engine)
+    if not inspetor.has_table('advogados'):
+        return 0
+    colunas = {c['name'] for c in inspetor.get_columns('advogados')}
+    if not {'foto_blob', 'foto_mime', 'foto_token'}.issubset(colunas):
+        return 0
+
+    migradas = 0
+    candidatos = Advogado.query.filter(
+        Advogado.foto_blob.is_(None),
+        Advogado.foto_url.like('/static/uploads/advogados/%')
+    ).all()
+    for adv in candidatos:
+        caminho = os.path.join(app.root_path, adv.foto_url.lstrip('/'))
+        if not os.path.isfile(caminho):
+            continue
+        try:
+            tamanho = os.path.getsize(caminho)
+            if tamanho <= 0 or tamanho > UPLOAD_TAMANHO_MAXIMO_BYTES:
+                continue
+            extensao = caminho.rsplit('.', 1)[-1].lower() if '.' in caminho else ''
+            mime = _mime_foto_por_extensao(extensao)
+            if not mime:
+                continue
+            with open(caminho, 'rb') as f:
+                dados = f.read()
+            # Reutiliza a mesma validação de assinatura usada no upload.
+            class _ArquivoMemoria:
+                def __init__(self, conteudo):
+                    self.stream = io_module.BytesIO(conteudo)
+            if not _conteudo_imagem_compativel(_ArquivoMemoria(dados), extensao):
+                continue
+            adv.foto_blob = dados
+            adv.foto_mime = mime
+            adv.foto_token = secrets.token_urlsafe(24)
+            adv.foto_url = _url_foto_banco(adv)
+            migradas += 1
+        except OSError:
+            app.logger.warning('Não foi possível migrar foto legada do advogado id=%s.', adv.id)
+    if migradas:
+        db.session.commit()
+        app.logger.info('[MIGRACAO] %s foto(s) legada(s) persistida(s) no banco.', migradas)
+    return migradas
+
+
+@app.route('/api/publico/foto-advogado/<token>', methods=['GET'])
+def foto_advogado_publica(token):
+    """Entrega a foto persistida no banco por token aleatório não enumerável."""
+    adv = Advogado.query.filter_by(foto_token=token).first()
+    if not adv or not adv.foto_blob or not adv.foto_mime:
+        return jsonify({'erro': 'Foto não encontrada.'}), 404
+    resposta = Response(bytes(adv.foto_blob), mimetype=adv.foto_mime)
+    resposta.headers['Content-Length'] = str(len(adv.foto_blob))
+    return resposta
+
+
 @app.route('/api/escritorio/advogados/<int:advogado_id>/foto', methods=['POST'])
 @login_escritorio_obrigatorio
 def upload_foto_advogado(advogado_id):
-    """Upload local de foto do advogado (Sprint 3) — alternativa ao campo foto_url."""
+    """Persiste a foto do advogado no banco; não depende do disco local da aplicação."""
     adv = Advogado.query.filter_by(id=advogado_id, escritorio_id=request.escritorio.id).first()
     if not adv:
         return jsonify({'erro': 'Advogado não encontrado'}), 404
@@ -959,28 +1583,40 @@ def upload_foto_advogado(advogado_id):
     arquivo = request.files.get('foto')
     if not arquivo or arquivo.filename == '':
         return jsonify({'erro': 'Nenhum arquivo enviado.'}), 400
-
     if not _extensao_permitida(arquivo.filename):
         return jsonify({'erro': 'Formato não permitido. Use jpg, jpeg, png ou webp.'}), 400
 
-    # nome de arquivo protegido: nunca usa o nome original do usuário
     extensao = arquivo.filename.rsplit('.', 1)[1].lower()
-    nome_seguro = secure_filename(f'advogado_{adv.id}_{secrets.token_hex(8)}.{extensao}')
-    caminho_completo = os.path.join(UPLOAD_PASTA_ADVOGADOS, nome_seguro)
+    if not _conteudo_imagem_compativel(arquivo, extensao):
+        return jsonify({'erro': 'O conteúdo do arquivo não corresponde a uma imagem válida do formato informado.'}), 400
 
-    arquivo.save(caminho_completo)
+    dados = arquivo.stream.read(UPLOAD_TAMANHO_MAXIMO_BYTES + 1)
+    if not dados:
+        return jsonify({'erro': 'Arquivo de imagem vazio.'}), 400
+    if len(dados) > UPLOAD_TAMANHO_MAXIMO_BYTES:
+        return jsonify({'erro': 'Imagem acima do limite permitido.'}), 413
 
-    # remove a foto antiga enviada por upload anterior, se existir, para não acumular lixo
+    mime = _mime_foto_por_extensao(extensao)
+    if not mime:
+        return jsonify({'erro': 'Formato de imagem não suportado.'}), 400
+
+    caminho_antigo = None
     if adv.foto_url and adv.foto_url.startswith('/static/uploads/advogados/'):
         caminho_antigo = os.path.join(app.root_path, adv.foto_url.lstrip('/'))
-        if os.path.exists(caminho_antigo):
-            try:
-                os.remove(caminho_antigo)
-            except OSError:
-                pass
 
-    adv.foto_url = f'/static/uploads/advogados/{nome_seguro}'
+    adv.foto_blob = dados
+    adv.foto_mime = mime
+    adv.foto_token = secrets.token_urlsafe(24)
+    adv.foto_url = _url_foto_banco(adv)
     db.session.commit()
+
+    # Remove apenas a cópia legada local depois que a persistência no banco foi confirmada.
+    if caminho_antigo and os.path.exists(caminho_antigo):
+        try:
+            os.remove(caminho_antigo)
+        except OSError:
+            app.logger.warning('Foto antiga persistiu em disco após migração do advogado id=%s.', adv.id)
+
     return jsonify({'ok': True, 'foto_url': adv.foto_url})
 
 
@@ -993,15 +1629,37 @@ def processos():
     if request.method == 'POST':
         data = request.get_json() or {}
 
-        telefone_normalizado = ''.join(filter(str.isdigit, data.get('cliente_telefone', '')))
+        cliente_nome = (data.get('cliente_nome') or '').strip()
+        telefone_normalizado = ''.join(filter(str.isdigit, (data.get('cliente_telefone') or ''))) 
+        cliente_email = (data.get('cliente_email') or '').strip()
+
+        try:
+            advogado_id = int(data.get('advogado_id'))
+        except (TypeError, ValueError):
+            return jsonify({'erro': 'Selecione um advogado válido.'}), 400
+
+        advogado = Advogado.query.filter_by(
+            id=advogado_id,
+            escritorio_id=request.escritorio.id,
+            ativo=True
+        ).first()
+        if not advogado:
+            return jsonify({'erro': 'Advogado ativo não encontrado neste escritório.'}), 404
+
+        if not cliente_nome:
+            return jsonify({'erro': 'Informe o nome do cliente.'}), 400
+        if len(telefone_normalizado) < 8:
+            return jsonify({'erro': 'Informe um telefone válido para o cliente.'}), 400
+
         cliente = Cliente.query.filter_by(telefone=telefone_normalizado).first()
+        cliente_existente = bool(cliente)
         senha_temp = None
         if not cliente:
-            senha_temp = secrets.token_hex(4)
+            senha_temp = secrets.token_urlsafe(9)
             cliente = Cliente(
-                nome=data.get('cliente_nome', '').strip(),
+                nome=cliente_nome,
                 telefone=telefone_normalizado,
-                email=data.get('cliente_email', '').strip(),
+                email=cliente_email,
                 senha_hash=hash_senha(senha_temp)
             )
             db.session.add(cliente)
@@ -1009,12 +1667,12 @@ def processos():
 
         processo = Processo(
             escritorio_id=request.escritorio.id,
-            advogado_id=data.get('advogado_id'),
+            advogado_id=advogado.id,
             cliente_id=cliente.id,
             codigo_unico=gerar_codigo_unico(),
             token_cliente=secrets.token_urlsafe(28),
-            numero_processo=data.get('numero_processo', '').strip(),
-            descricao=data.get('descricao', '').strip()
+            numero_processo=(data.get('numero_processo') or '').strip(),
+            descricao=(data.get('descricao') or '').strip()
         )
         db.session.add(processo)
         db.session.commit()
@@ -1024,11 +1682,20 @@ def processos():
             'codigo_unico': processo.codigo_unico,
             'cliente_id': cliente.id,
             'cliente_nome': cliente.nome,
+            'cliente_existente': cliente_existente,
             'senha_temporaria': senha_temp,
+            'mensagem_acesso': (
+                'Cliente já cadastrado. A senha existente continua válida; se necessário, use Reenviar acesso.'
+                if cliente_existente else
+                'Cliente novo. Entregue a senha temporária uma única vez e oriente a troca após o primeiro acesso.'
+            ),
             'link_cliente_seguro': f'/cliente/seguro/{processo.token_cliente}'
         })
 
-    lista = Processo.query.filter_by(escritorio_id=request.escritorio.id).order_by(Processo.criado_em.desc()).all()
+    lista = Processo.query.options(
+        joinedload(Processo.cliente),
+        joinedload(Processo.advogado),
+    ).filter_by(escritorio_id=request.escritorio.id).order_by(Processo.criado_em.desc()).all()
     precisa_commit = False
     for p in lista:
         if not p.token_cliente:  # compatibilidade: processos antigos (pré-Sprint 3) ganham token agora
@@ -1067,11 +1734,26 @@ def processo_detalhe(processo_id):
 
     data = request.get_json() or {}
     if 'numero_processo' in data:
-        processo.numero_processo = data['numero_processo'].strip()
+        if data['numero_processo'] is not None and not isinstance(data['numero_processo'], str):
+            return jsonify({'erro': 'Número do processo inválido.'}), 400
+        processo.numero_processo = (data['numero_processo'] or '').strip()
     if 'descricao' in data:
-        processo.descricao = data['descricao'].strip()
+        if data['descricao'] is not None and not isinstance(data['descricao'], str):
+            return jsonify({'erro': 'Descrição inválida.'}), 400
+        processo.descricao = (data['descricao'] or '').strip()
     if 'advogado_id' in data and data['advogado_id']:
-        processo.advogado_id = data['advogado_id']
+        try:
+            novo_advogado_id = int(data['advogado_id'])
+        except (TypeError, ValueError):
+            return jsonify({'erro': 'Advogado inválido.'}), 400
+        novo_advogado = Advogado.query.filter_by(
+            id=novo_advogado_id,
+            escritorio_id=request.escritorio.id,
+            ativo=True
+        ).first()
+        if not novo_advogado:
+            return jsonify({'erro': 'Advogado ativo não encontrado neste escritório.'}), 404
+        processo.advogado_id = novo_advogado.id
     if 'status' in data and data['status'] in ('ativo', 'arquivado'):
         processo.status = data['status']
     db.session.commit()
@@ -1096,9 +1778,10 @@ def resumo_exclusao_processo(processo_id):
 @app.route('/api/escritorio/tentativas', methods=['GET'])
 @login_escritorio_obrigatorio
 def listar_tentativas():
-    processos_ids = [p.id for p in Processo.query.filter_by(escritorio_id=request.escritorio.id).all()]
-    tentativas = TentativaContato.query.filter(
-        TentativaContato.processo_id.in_(processos_ids)
+    tentativas = TentativaContato.query.join(Processo).options(
+        joinedload(TentativaContato.processo).joinedload(Processo.cliente)
+    ).filter(
+        Processo.escritorio_id == request.escritorio.id
     ).order_by(TentativaContato.criado_em.desc()).limit(100).all()
 
     return jsonify([{
@@ -1117,7 +1800,7 @@ def _tentativa_pertence_ao_escritorio(tentativa, escritorio_id):
 @app.route('/api/escritorio/tentativas/<int:tentativa_id>', methods=['DELETE'])
 @login_escritorio_obrigatorio
 def excluir_tentativa(tentativa_id):
-    tentativa = TentativaContato.query.get(tentativa_id)
+    tentativa = db.session.get(TentativaContato, tentativa_id)
     if not tentativa or not _tentativa_pertence_ao_escritorio(tentativa, request.escritorio.id):
         return jsonify({'erro': 'Tentativa suspeita não encontrada.'}), 404
     try:
@@ -1156,15 +1839,18 @@ def excluir_tentativas_lote():
 # CLIENTES
 # ──────────────────────────────────────────────
 
-def _serializar_cliente(cliente, escritorio_id):
-    processos_escritorio = [p for p in cliente.processos if p.escritorio_id == escritorio_id]
+def _serializar_cliente(cliente, escritorio_id, processos_count=None):
+    if processos_count is None:
+        processos_count = db.session.query(func.count(Processo.id)).filter_by(
+            cliente_id=cliente.id, escritorio_id=escritorio_id
+        ).scalar() or 0
     return {
         'id': cliente.id,
         'nome': cliente.nome,
         'telefone': cliente.telefone,
         'email': cliente.email,
         'ativo': cliente.ativo,
-        'processos_count': len(processos_escritorio),
+        'processos_count': int(processos_count),
         'criado_em': cliente.criado_em.strftime('%d/%m/%Y') if cliente.criado_em else None
     }
 
@@ -1179,14 +1865,23 @@ def _cliente_do_escritorio_ou_404(cliente_id, escritorio_id):
     pertence = Processo.query.filter_by(cliente_id=cliente_id, escritorio_id=escritorio_id).first()
     if not pertence:
         return None
-    return Cliente.query.get(cliente_id)
+    return db.session.get(Cliente, cliente_id)
 
 
 @app.route('/api/escritorio/clientes', methods=['GET'])
 @login_escritorio_obrigatorio
 def listar_clientes():
-    lista = _clientes_do_escritorio_query(request.escritorio.id).order_by(Cliente.nome.asc()).all()
-    return jsonify([_serializar_cliente(c, request.escritorio.id) for c in lista])
+    # Uma única consulta traz os clientes e a quantidade de processos deste escritório,
+    # evitando uma consulta extra por cliente (N+1).
+    lista = db.session.query(Cliente, func.count(Processo.id).label('processos_count')).join(
+        Processo, Processo.cliente_id == Cliente.id
+    ).filter(
+        Processo.escritorio_id == request.escritorio.id
+    ).group_by(Cliente.id).order_by(Cliente.nome.asc()).all()
+    return jsonify([
+        _serializar_cliente(cliente, request.escritorio.id, processos_count)
+        for cliente, processos_count in lista
+    ])
 
 
 @app.route('/api/escritorio/clientes/<int:cliente_id>', methods=['PUT', 'DELETE'])
@@ -1212,13 +1907,27 @@ def cliente_detalhe(cliente_id):
                          'cliente foi preservado por também pertencer a outro escritório.')
         return jsonify({'ok': True, 'cliente_removido': removido_totalmente, 'mensagem': mensagem})
 
+    if _cliente_possui_processos_de_outro_escritorio(cliente.id, request.escritorio.id):
+        return jsonify({
+            'erro': 'Este cliente está vinculado a mais de um escritório. Por segurança, dados globais do cliente não podem ser alterados por um único escritório.'
+        }), 409
+
     data = request.get_json() or {}
-    if 'nome' in data and data['nome'].strip():
+    if 'nome' in data:
+        if not isinstance(data['nome'], str) or not data['nome'].strip():
+            return jsonify({'erro': 'Nome do cliente inválido.'}), 400
         cliente.nome = data['nome'].strip()
-    if 'telefone' in data and data['telefone'].strip():
-        cliente.telefone = ''.join(filter(str.isdigit, data['telefone']))
+    if 'telefone' in data:
+        if not isinstance(data['telefone'], str):
+            return jsonify({'erro': 'Telefone do cliente inválido.'}), 400
+        telefone = ''.join(filter(str.isdigit, data['telefone']))
+        if len(telefone) < 8:
+            return jsonify({'erro': 'Telefone do cliente inválido.'}), 400
+        cliente.telefone = telefone
     if 'email' in data:
-        cliente.email = data['email'].strip()
+        if data['email'] is not None and not isinstance(data['email'], str):
+            return jsonify({'erro': 'Email do cliente inválido.'}), 400
+        cliente.email = (data['email'] or '').strip()
     db.session.commit()
     return jsonify(_serializar_cliente(cliente, request.escritorio.id))
 
@@ -1245,6 +1954,8 @@ def desativar_cliente(cliente_id):
     cliente = _cliente_do_escritorio_ou_404(cliente_id, request.escritorio.id)
     if not cliente:
         return jsonify({'erro': 'Cliente não encontrado neste escritório.'}), 404
+    if _cliente_possui_processos_de_outro_escritorio(cliente.id, request.escritorio.id):
+        return jsonify({'erro': 'Cliente compartilhado entre escritórios; alteração global de status bloqueada por segurança.'}), 409
     cliente.ativo = False
     db.session.commit()
     return jsonify({'ok': True, 'ativo': cliente.ativo})
@@ -1256,6 +1967,8 @@ def reativar_cliente(cliente_id):
     cliente = _cliente_do_escritorio_ou_404(cliente_id, request.escritorio.id)
     if not cliente:
         return jsonify({'erro': 'Cliente não encontrado neste escritório.'}), 404
+    if _cliente_possui_processos_de_outro_escritorio(cliente.id, request.escritorio.id):
+        return jsonify({'erro': 'Cliente compartilhado entre escritórios; alteração global de status bloqueada por segurança.'}), 409
     cliente.ativo = True
     db.session.commit()
     return jsonify({'ok': True, 'ativo': cliente.ativo})
@@ -1335,12 +2048,14 @@ def iniciar_contato_seguro():
 
     # cancela automaticamente qualquer CCA ainda ativo deste advogado com este cliente,
     # para nunca haver dois códigos simultâneos válidos
-    antigos_ativos = ContatoSeguro.query.filter_by(
-        escritorio_id=request.escritorio.id, advogado_id=advogado.id, cliente_id=cliente.id, status='ativo'
-    ).all()
-    for antigo in antigos_ativos:
-        antigo.status = 'cancelado'
-        antigo.cancelado_em = datetime.utcnow()
+    cancelado_em = agora_utc()
+    ContatoSeguro.query.filter_by(
+        escritorio_id=request.escritorio.id, advogado_id=advogado.id,
+        cliente_id=cliente.id, status='ativo'
+    ).update(
+        {'status': 'cancelado', 'cancelado_em': cancelado_em},
+        synchronize_session=False
+    )
 
     contato = ContatoSeguro(
         escritorio_id=request.escritorio.id,
@@ -1351,7 +2066,7 @@ def iniciar_contato_seguro():
         canal=canal,
         status='ativo',
         observacao=observacao,
-        expira_em=datetime.utcnow() + timedelta(minutes=CONTATO_SEGURO_TTL_MINUTOS)
+        expira_em=agora_utc() + timedelta(minutes=CONTATO_SEGURO_TTL_MINUTOS)
     )
     db.session.add(contato)
     db.session.commit()
@@ -1362,7 +2077,11 @@ def iniciar_contato_seguro():
 @app.route('/api/escritorio/contato-seguro/listar', methods=['GET'])
 @login_escritorio_obrigatorio
 def listar_contato_seguro():
-    lista = ContatoSeguro.query.filter_by(escritorio_id=request.escritorio.id) \
+    lista = ContatoSeguro.query.options(
+        joinedload(ContatoSeguro.advogado),
+        joinedload(ContatoSeguro.cliente),
+        joinedload(ContatoSeguro.processo),
+    ).filter_by(escritorio_id=request.escritorio.id) \
         .order_by(ContatoSeguro.criado_em.desc()).limit(100).all()
     return jsonify([_serializar_cca_escritorio(c) for c in lista])
 
@@ -1377,7 +2096,7 @@ def cancelar_contato_seguro(contato_id):
         return jsonify({'erro': 'Este contato já não está mais ativo.'}), 409
 
     contato.status = 'cancelado'
-    contato.cancelado_em = datetime.utcnow()
+    contato.cancelado_em = agora_utc()
     db.session.commit()
     return jsonify({'ok': True})
 
@@ -1392,7 +2111,7 @@ def reiniciar_contato_seguro(contato_id):
 
     if antigo.status_atual() == 'ativo':
         antigo.status = 'cancelado'
-        antigo.cancelado_em = datetime.utcnow()
+        antigo.cancelado_em = agora_utc()
 
     novo = ContatoSeguro(
         escritorio_id=antigo.escritorio_id,
@@ -1403,7 +2122,7 @@ def reiniciar_contato_seguro(contato_id):
         canal=antigo.canal,
         status='ativo',
         observacao=antigo.observacao,
-        expira_em=datetime.utcnow() + timedelta(minutes=CONTATO_SEGURO_TTL_MINUTOS)
+        expira_em=agora_utc() + timedelta(minutes=CONTATO_SEGURO_TTL_MINUTOS)
     )
     db.session.add(novo)
     db.session.commit()
@@ -1417,13 +2136,14 @@ def limpar_expirados_contato_seguro():
     Marca formalmente como 'expirado' todo CCA vencido (apenas atualiza o status
     salvo no banco — nada é apagado, conforme exigido).
     """
-    agora = datetime.utcnow()
-    pendentes = ContatoSeguro.query.filter_by(escritorio_id=request.escritorio.id, status='ativo') \
-        .filter(ContatoSeguro.expira_em < agora).all()
-    for c in pendentes:
-        c.status = 'expirado'
+    agora = agora_utc()
+    marcados = ContatoSeguro.query.filter_by(
+        escritorio_id=request.escritorio.id, status='ativo'
+    ).filter(ContatoSeguro.expira_em < agora).update(
+        {'status': 'expirado'}, synchronize_session=False
+    )
     db.session.commit()
-    return jsonify({'ok': True, 'marcados_como_expirados': len(pendentes)})
+    return jsonify({'ok': True, 'marcados_como_expirados': int(marcados or 0)})
 
 
 @app.route('/api/escritorio/contato-seguro/<int:contato_id>', methods=['DELETE'])
@@ -1474,8 +2194,8 @@ def excluir_contato_seguro_lote():
 @app.route('/api/cliente/login', methods=['POST'])
 def login_cliente():
     data = request.get_json() or {}
-    telefone = ''.join(filter(str.isdigit, data.get('telefone', '')))
-    senha = data.get('senha', '')
+    telefone = ''.join(filter(str.isdigit, (data.get('telefone') or ''))) 
+    senha = data.get('senha') or ''
 
     permitido, espera = verificar_rate_limit(telefone)
     if not permitido:
@@ -1485,20 +2205,28 @@ def login_cliente():
     if not cliente or not verificar_senha(cliente.senha_hash, senha):
         registrar_tentativa_falha(telefone)
         return jsonify({'erro': 'Telefone ou senha incorretos'}), 401
+    if not cliente.ativo:
+        return jsonify({'erro': 'Acesso do cliente desativado. Entre em contato com o escritório responsável.'}), 403
 
     limpar_tentativas(telefone)
     if len(cliente.senha_hash) == 64 and ':' not in cliente.senha_hash:
         cliente.senha_hash = hash_senha(senha)
         db.session.commit()
 
-    token = gerar_token({'id': cliente.id, 'tipo': 'cliente'})
-    return jsonify({'token': token, 'nome': cliente.nome})
+    return _resposta_com_sessao(
+        {'nome': cliente.nome},
+        {'id': cliente.id, 'tipo': 'cliente'},
+        cliente.senha_hash
+    )
 
 
 @app.route('/api/cliente/processos', methods=['GET'])
 @login_cliente_obrigatorio
 def processos_do_cliente():
-    lista = Processo.query.filter_by(cliente_id=request.cliente.id, status='ativo').all()
+    lista = Processo.query.options(
+        joinedload(Processo.advogado),
+        joinedload(Processo.escritorio),
+    ).filter_by(cliente_id=request.cliente.id, status='ativo').all()
     return jsonify([{
         'id': p.id, 'codigo_unico': p.codigo_unico, 'numero_processo': p.numero_processo,
         'advogado_nome': p.advogado.nome if p.advogado else None,
@@ -1507,11 +2235,224 @@ def processos_do_cliente():
 
 
 # ──────────────────────────────────────────────
+# PRIVACIDADE / DIREITOS DO TITULAR
+# ──────────────────────────────────────────────
+
+@app.route('/api/cliente/privacidade/exportar', methods=['GET'])
+@login_cliente_obrigatorio
+def cliente_privacidade_exportar():
+    cliente = request.cliente
+    processos = Processo.query.options(
+        joinedload(Processo.advogado),
+        joinedload(Processo.escritorio),
+    ).filter_by(cliente_id=cliente.id).order_by(Processo.criado_em.asc()).all()
+    verificacoes = Verificacao.query.filter_by(cliente_id=cliente.id).order_by(
+        Verificacao.criado_em.asc()
+    ).all()
+    return jsonify({
+        'gerado_em': agora_utc().isoformat(),
+        'titular': {
+            'nome': cliente.nome,
+            'telefone': cliente.telefone,
+            'email': cliente.email,
+            'ativo': bool(cliente.ativo),
+            'criado_em': cliente.criado_em.isoformat() if cliente.criado_em else None,
+        },
+        'processos': [{
+            'codigo_unico': p.codigo_unico,
+            'numero_processo': p.numero_processo,
+            'descricao': p.descricao,
+            'status': p.status,
+            'escritorio_nome': p.escritorio.nome if p.escritorio else None,
+            'advogado_nome': p.advogado.nome if p.advogado else None,
+            'criado_em': p.criado_em.isoformat() if p.criado_em else None,
+        } for p in processos],
+        'verificacoes': [{
+            'numero_consultado': v.numero_consultado,
+            'codigo_consultado': v.codigo_consultado,
+            'resultado': v.resultado,
+            'criado_em': v.criado_em.isoformat() if v.criado_em else None,
+        } for v in verificacoes],
+    })
+
+
+@app.route('/api/cliente/privacidade/solicitacoes', methods=['GET', 'POST'])
+@login_cliente_obrigatorio
+def cliente_privacidade_solicitacoes():
+    referencia = _referencia_privacidade('cliente', request.cliente.id)
+    if request.method == 'GET':
+        itens = SolicitacaoPrivacidade.query.filter_by(
+            referencia_titular=referencia, titular_tipo='cliente'
+        ).order_by(SolicitacaoPrivacidade.criado_em.desc()).all()
+        return jsonify([_serializar_solicitacao_privacidade(i) for i in itens])
+
+    item, erro = _criar_solicitacao_privacidade(
+        'cliente', request.cliente.id, request.get_json() or {}
+    )
+    if erro:
+        return jsonify({'erro': erro}), 400
+    return jsonify({
+        'ok': True,
+        'solicitacao': _serializar_solicitacao_privacidade(item),
+        'mensagem': (
+            'Solicitação registrada. O pedido será analisado conforme a finalidade '
+            'do tratamento, obrigações aplicáveis e direitos previstos na LGPD.'
+        )
+    }), 201
+
+
+@app.route('/api/escritorio/privacidade/exportar', methods=['GET'])
+@login_escritorio_obrigatorio
+def escritorio_privacidade_exportar():
+    escritorio = request.escritorio
+    advogados = Advogado.query.filter_by(escritorio_id=escritorio.id).order_by(
+        Advogado.criado_em.asc()
+    ).all()
+    return jsonify({
+        'gerado_em': agora_utc().isoformat(),
+        'conta': {
+            'nome': escritorio.nome,
+            'cnpj': escritorio.cnpj,
+            'email': escritorio.email,
+            'plano': escritorio.plano,
+            'plano_expira': escritorio.plano_expira.isoformat() if escritorio.plano_expira else None,
+            'criado_em': escritorio.criado_em.isoformat() if escritorio.criado_em else None,
+        },
+        'advogados': [{
+            'nome': a.nome,
+            'oab': a.oab,
+            'telefone_oficial': a.telefone_oficial,
+            'foto_url': _url_foto_banco(a),
+            'ativo': bool(a.ativo),
+            'criado_em': a.criado_em.isoformat() if a.criado_em else None,
+        } for a in advogados],
+    })
+
+
+@app.route('/api/escritorio/privacidade/solicitacoes', methods=['GET', 'POST'])
+@login_escritorio_obrigatorio
+def escritorio_privacidade_solicitacoes():
+    referencia = _referencia_privacidade('escritorio', request.escritorio.id)
+    if request.method == 'GET':
+        itens = SolicitacaoPrivacidade.query.filter_by(
+            referencia_titular=referencia, titular_tipo='escritorio'
+        ).order_by(SolicitacaoPrivacidade.criado_em.desc()).all()
+        return jsonify([_serializar_solicitacao_privacidade(i) for i in itens])
+
+    item, erro = _criar_solicitacao_privacidade(
+        'escritorio', request.escritorio.id, request.get_json() or {}
+    )
+    if erro:
+        return jsonify({'erro': erro}), 400
+    return jsonify({'ok': True, 'solicitacao': _serializar_solicitacao_privacidade(item)}), 201
+
+
+# ──────────────────────────────────────────────
 # CONTATO SEGURO ADVOGO — lado do cliente
 # ──────────────────────────────────────────────
 
+TIPOS_SOLICITACAO_PRIVACIDADE = {
+    'acesso',
+    'correcao',
+    'anonimizacao',
+    'bloqueio',
+    'exclusao',
+    'portabilidade',
+    'oposicao',
+    'revogacao_consentimento',
+    'informacoes_compartilhamento',
+}
+
+
+def _referencia_privacidade(titular_tipo, titular_id):
+    mensagem = f'{titular_tipo}:{int(titular_id)}'.encode('utf-8')
+    chave = app.config['SECRET_KEY'].encode('utf-8')
+    return hmac.new(chave, mensagem, hashlib.sha256).hexdigest()
+
+
+def _pseudonimizar_ip(ip):
+    ip = (ip or '').strip()
+    if not ip:
+        return None
+    if ip.startswith('h:') and len(ip) > 10:
+        return ip
+    chave = app.config['SECRET_KEY'].encode('utf-8')
+    digest = hmac.new(chave, ip.encode('utf-8'), hashlib.sha256).hexdigest()
+    return 'h:' + digest[:48]
+
+
 def _ip_cliente():
-    return request.headers.get('X-Forwarded-For', request.remote_addr or '').split(',')[0].strip()
+    bruto = request.headers.get('X-Forwarded-For', request.remote_addr or '').split(',')[0].strip()
+    return _pseudonimizar_ip(bruto)
+
+
+def _migrar_ips_legados_para_hash():
+    """Pseudonimiza IPs históricos; o IP bruto deixa de ficar persistido."""
+    alterados = 0
+    inspetor = inspect(db.engine)
+    for modelo in (ContatoSeguroLog, AcessoPublicoLog):
+        if not inspetor.has_table(modelo.__tablename__):
+            continue
+        registros = modelo.query.filter(
+            modelo.ip.isnot(None),
+            ~modelo.ip.like('h:%')
+        ).all()
+        for registro in registros:
+            registro.ip = _pseudonimizar_ip(registro.ip)
+            alterados += 1
+    if alterados:
+        db.session.commit()
+        app.logger.info('[LGPD] %s IP(s) histórico(s) pseudonimizado(s).', alterados)
+    return alterados
+
+
+def _aplicar_retencao_logs_privacidade(dias=None):
+    """Aplica retenção somente quando um período positivo for explicitamente definido."""
+    dias = LGPD_RETENCAO_LOGS_DIAS if dias is None else int(dias)
+    if dias <= 0:
+        return {'contatos_seguros_logs': 0, 'acessos_publicos_logs': 0}
+    limite = agora_utc() - timedelta(days=dias)
+    removidos_contato = ContatoSeguroLog.query.filter(
+        ContatoSeguroLog.criado_em < limite
+    ).delete(synchronize_session=False)
+    removidos_publico = AcessoPublicoLog.query.filter(
+        AcessoPublicoLog.criado_em < limite
+    ).delete(synchronize_session=False)
+    db.session.commit()
+    return {
+        'contatos_seguros_logs': int(removidos_contato or 0),
+        'acessos_publicos_logs': int(removidos_publico or 0),
+    }
+
+
+def _criar_solicitacao_privacidade(titular_tipo, titular_id, data):
+    tipo = (data.get('tipo') or '').strip().lower()
+    detalhes = (data.get('detalhes') or '').strip()[:500]
+    if tipo not in TIPOS_SOLICITACAO_PRIVACIDADE:
+        return None, 'Tipo de solicitação de privacidade inválido.'
+    item = SolicitacaoPrivacidade(
+        referencia_titular=_referencia_privacidade(titular_tipo, titular_id),
+        titular_tipo=titular_tipo,
+        tipo=tipo,
+        status='recebida',
+        detalhes=detalhes or None,
+        criado_em=agora_utc(),
+        atualizado_em=agora_utc(),
+    )
+    db.session.add(item)
+    db.session.commit()
+    return item, None
+
+
+def _serializar_solicitacao_privacidade(item):
+    return {
+        'id': item.id,
+        'tipo': item.tipo,
+        'status': item.status,
+        'detalhes': item.detalhes,
+        'criado_em': item.criado_em.isoformat() if item.criado_em else None,
+        'atualizado_em': item.atualizado_em.isoformat() if item.atualizado_em else None,
+    }
 
 
 @app.route('/api/cliente/contato-seguro/ativo', methods=['GET'])
@@ -1521,7 +2462,7 @@ def contato_seguro_ativo():
     O cliente nunca informa nada aqui — só consulta. Retorna o contato autorizado
     ativo mais recente para ele, se existir, sem nunca aceitar um código vencido.
     """
-    agora = datetime.utcnow()
+    agora = agora_utc()
     contato = ContatoSeguro.query.filter_by(cliente_id=request.cliente.id, status='ativo') \
         .filter(ContatoSeguro.expira_em > agora) \
         .order_by(ContatoSeguro.criado_em.desc()).first()
@@ -1561,7 +2502,7 @@ def contato_seguro_verificar():
     data = request.get_json() or {}
     pediu_pagamento = bool(data.get('pediu_pagamento', False))
 
-    agora = datetime.utcnow()
+    agora = agora_utc()
     contato = ContatoSeguro.query.filter_by(cliente_id=request.cliente.id, status='ativo') \
         .filter(ContatoSeguro.expira_em > agora) \
         .order_by(ContatoSeguro.criado_em.desc()).first()
@@ -1638,8 +2579,8 @@ def verificar_contato():
     (ou o código do caso) e o sistema confirma se é legítimo.
     """
     data = request.get_json() or {}
-    numero = ''.join(filter(str.isdigit, data.get('numero', '')))
-    codigo = data.get('codigo', '').strip().upper()
+    numero = ''.join(filter(str.isdigit, (data.get('numero') or ''))) 
+    codigo = (data.get('codigo') or '').strip().upper()
     canal = data.get('canal', 'whatsapp')
     pediu_pagamento = data.get('pediu_pagamento', False)
 
@@ -1707,7 +2648,8 @@ def verificar_contato():
 # ──────────────────────────────────────────────
 
 def _ip_requisicao():
-    return request.headers.get('X-Forwarded-For', request.remote_addr or '').split(',')[0].strip()
+    bruto = request.headers.get('X-Forwarded-For', request.remote_addr or '').split(',')[0].strip()
+    return _pseudonimizar_ip(bruto)
 
 
 def _avatar_iniciais(nome):
@@ -1739,7 +2681,7 @@ def contato_seguro_publico(token):
         # mensagem genérica — nunca revela se o token "quase" existe
         return jsonify({'valido': False, 'mensagem': 'Link inválido ou expirado.'}), 404
 
-    agora = datetime.utcnow()
+    agora = agora_utc()
     cca_ativo = ContatoSeguro.query.filter_by(processo_id=processo.id, status='ativo') \
         .filter(ContatoSeguro.expira_em > agora).order_by(ContatoSeguro.criado_em.desc()).first()
 
@@ -1749,7 +2691,7 @@ def contato_seguro_publico(token):
         'escritorio_nome': processo.escritorio.nome,
         'advogado_nome': advogado.nome if advogado else None,
         'advogado_oab': advogado.oab if advogado else None,
-        'advogado_foto_url': advogado.foto_url if advogado else None,
+        'advogado_foto_url': _url_foto_banco(advogado) if advogado else None,
         'advogado_iniciais': _avatar_iniciais(advogado.nome if advogado else ''),
         'advogado_telefone_oficial': advogado.telefone_oficial if advogado else None,
         'contato_ativo': bool(cca_ativo),
@@ -1826,7 +2768,7 @@ def cliente_publico_contato_ativo(token):
     if not processo:
         return jsonify({'valido': False, 'mensagem': 'Link inválido ou expirado.'}), 404
 
-    agora = datetime.utcnow()
+    agora = agora_utc()
     cca_ativo = ContatoSeguro.query.filter_by(processo_id=processo.id, status='ativo') \
         .filter(ContatoSeguro.expira_em > agora).order_by(ContatoSeguro.criado_em.desc()).first()
 
@@ -1883,9 +2825,12 @@ def verificar_contato_publico():
     Verificação rápida sem necessidade de login do cliente.
     Requer o código do processo (compartilhado pelo escritório) + número de contato.
     """
+    permitido, espera = verificar_limite_acao('verificacao-publica', 30, 60)
+    if not permitido:
+        return jsonify({'erro': f'Muitas verificações. Tente novamente em {espera} segundos.'}), 429
     data = request.get_json() or {}
-    numero = ''.join(filter(str.isdigit, data.get('numero', '')))
-    codigo = data.get('codigo', '').strip().upper()
+    numero = ''.join(filter(str.isdigit, (data.get('numero') or ''))) 
+    codigo = (data.get('codigo') or '').strip().upper()
     canal = data.get('canal', 'whatsapp')
     pediu_pagamento = data.get('pediu_pagamento', False)
 
@@ -2084,7 +3029,7 @@ def _rodape_pdf(story):
     story.append(HRFlowable(width='100%', color=colors.HexColor('#e1e6ef'), thickness=0.6))
     story.append(Spacer(1, 4))
     story.append(Paragraph(
-        f'Documento gerado em {datetime.utcnow().strftime("%d/%m/%Y %H:%M")} (UTC) — '
+        f'Documento gerado em {agora_utc().strftime("%d/%m/%Y %H:%M")} (UTC) — '
         f'ADVOGO SEGURO &mdash; SPYNET Tecnologia Forense &amp; Soluções Digitais Ltda.',
         _ESTILO_RODAPE
     ))
@@ -2180,15 +3125,16 @@ def relatorio_mensal_pdf():
     Relatório mensal de verificações: aceita ?mes=MM&ano=AAAA (padrão: mês atual).
     Reúne tentativas suspeitas e CCAs do período para visão consolidada do escritório.
     """
-    agora = datetime.utcnow()
+    agora = agora_utc()
     mes = int(request.args.get('mes', agora.month))
     ano = int(request.args.get('ano', agora.year))
     inicio = datetime(ano, mes, 1)
     fim = datetime(ano + 1, 1, 1) if mes == 12 else datetime(ano, mes + 1, 1)
 
-    processos_ids = [p.id for p in Processo.query.filter_by(escritorio_id=request.escritorio.id).all()]
-    tentativas = TentativaContato.query.filter(
-        TentativaContato.processo_id.in_(processos_ids),
+    tentativas = TentativaContato.query.join(Processo).options(
+        joinedload(TentativaContato.processo).joinedload(Processo.cliente)
+    ).filter(
+        Processo.escritorio_id == request.escritorio.id,
         TentativaContato.criado_em >= inicio, TentativaContato.criado_em < fim
     ).order_by(TentativaContato.criado_em.asc()).all()
     ccas = ContatoSeguro.query.filter(
@@ -2310,68 +3256,150 @@ def relatorio_processo_pdf(processo_id):
 
 @app.route('/webhook/hotmart', methods=['POST'])
 def webhook_hotmart():
-    data = request.get_json() or {}
+    if not HOTMART_WEBHOOK_TOKEN:
+        app.logger.error('Webhook Hotmart bloqueado: HOTMART_WEBHOOK_TOKEN não configurado.')
+        return jsonify({'erro': 'Webhook indisponível.'}), 503
 
     token_recebido = request.headers.get('X-Hotmart-Hottok', '')
-    if HOTMART_WEBHOOK_TOKEN and token_recebido != HOTMART_WEBHOOK_TOKEN:
+    if not token_recebido or not hmac.compare_digest(token_recebido, HOTMART_WEBHOOK_TOKEN):
         return jsonify({'erro': 'Token inválido'}), 403
 
-    evento = data.get('event', '')
-    email_comprador = data.get('data', {}).get('buyer', {}).get('email', '').strip().lower()
+    payload = request.get_json(silent=True) or {}
+    evento = (payload.get('event') or '').strip()
+    dados = payload.get('data') or {}
+    email_comprador = (((dados.get('buyer') or {}).get('email')) or '').strip().lower()
 
+    eventos_aprovados = {'PURCHASE_COMPLETE', 'PURCHASE_APPROVED'}
+    eventos_cancelados = {
+        'PURCHASE_REFUNDED',
+        'PURCHASE_CANCELED',
+        'PURCHASE_CHARGEBACK',
+        'SUBSCRIPTION_CANCELLATION',
+    }
+    if evento not in eventos_aprovados | eventos_cancelados:
+        return jsonify({'ok': True, 'ignorado': True, 'motivo': 'evento_sem_efeito'})
+
+    event_id = str(payload.get('id') or '').strip()
+    produto_id = str(((dados.get('product') or {}).get('id')) or '').strip()
+
+    if not event_id:
+        return jsonify({'erro': 'ID único do evento não encontrado no payload.'}), 400
     if not email_comprador:
         return jsonify({'erro': 'Email não encontrado no payload'}), 400
+    if not produto_id:
+        return jsonify({'erro': 'Produto não identificado no payload'}), 400
+
+    ja_processado = EventoWebhook.query.filter_by(
+        provedor='hotmart', event_id=event_id
+    ).first()
+    if ja_processado:
+        return jsonify({'ok': True, 'duplicado': True})
+
+    codigo_plano = HOTMART_PLAN_MAP.get(produto_id)
+    if not codigo_plano:
+        # Falha fechada: produto não mapeado nunca concede acesso.
+        return jsonify({
+            'ok': True,
+            'ignorado': True,
+            'motivo': 'produto_nao_mapeado',
+        }), 202
 
     escritorio = Escritorio.query.filter_by(email=email_comprador).first()
     if not escritorio:
         return jsonify({'erro': 'Escritório não encontrado para este email'}), 404
 
-    if evento in ('PURCHASE_COMPLETE', 'PURCHASE_APPROVED'):
-        escritorio.plano = 'pro'
-        escritorio.plano_expira = datetime.utcnow() + timedelta(days=32)
-    elif evento in ('PURCHASE_REFUNDED', 'PURCHASE_CANCELED', 'PURCHASE_CHARGEBACK', 'SUBSCRIPTION_CANCELLATION'):
-        escritorio.plano = 'cancelado'
-        escritorio.plano_expira = None
+    resultado = 'processado'
+    if evento in eventos_aprovados:
+        agora = agora_utc()
+        expira_atual = escritorio.plano_expira
+        mesmo_plano = normalizar_codigo_plano(escritorio.plano) == codigo_plano
+        base_expiracao = (
+            expira_atual
+            if mesmo_plano and expira_atual and expira_atual > agora
+            else agora
+        )
+        escritorio.plano = codigo_plano
+        escritorio.plano_expira = base_expiracao + timedelta(days=32)
+        resultado = 'ativado'
+    else:
+        # Um cancelamento antigo não derruba um plano diferente comprado depois.
+        if normalizar_codigo_plano(escritorio.plano) == codigo_plano:
+            escritorio.plano = 'cancelado'
+            escritorio.plano_expira = agora_utc()
+            resultado = 'cancelado'
+        else:
+            resultado = 'cancelamento_ignorado_plano_diferente'
 
+    db.session.add(EventoWebhook(
+        provedor='hotmart',
+        event_id=event_id,
+        evento=evento,
+        produto_id=produto_id,
+        plano=codigo_plano,
+        resultado=resultado,
+    ))
     db.session.commit()
-    return jsonify({'ok': True})
+    return jsonify({'ok': True, 'resultado': resultado, 'plano': codigo_plano})
 
 
 # ──────────────────────────────────────────────
-# ADMIN
+# ADMIN — segredo somente em cabeçalho, nunca em URL
 # ──────────────────────────────────────────────
 
-@app.route('/api/admin/definir-plano/<secret>/<email>/<codigo>', methods=['GET', 'POST'])
-def admin_definir_plano(secret, email, codigo):
-    if secret != ADMIN_SECRET:
+def _admin_autorizado():
+    if not ADMIN_SECRET:
+        return False
+    recebido = request.headers.get('X-Admin-Secret', '')
+    if not recebido:
+        auth = request.headers.get('Authorization', '')
+        if auth.startswith('Bearer '):
+            recebido = auth[7:].strip()
+    return bool(recebido and hmac.compare_digest(recebido, ADMIN_SECRET))
+
+
+def _exigir_admin():
+    if not ADMIN_SECRET:
+        return jsonify({'erro': 'Administração indisponível: ADMIN_SECRET não configurado.'}), 503
+    if not _admin_autorizado():
         return jsonify({'erro': 'Não autorizado'}), 403
+    return None
 
-    codigo = normalizar_codigo_plano(codigo)
+
+@app.route('/api/admin/definir-plano', methods=['POST'])
+def admin_definir_plano():
+    erro = _exigir_admin()
+    if erro:
+        return erro
+
+    data = request.get_json(silent=True) or {}
+    email = (data.get('email') or '').strip().lower()
+    codigo = normalizar_codigo_plano(data.get('codigo'))
+    dias = data.get('dias')
+
+    if not email:
+        return jsonify({'erro': 'Informe o email do escritório.'}), 400
     if codigo not in PLANOS_ADVOGO_SEGURO:
-        return jsonify({
-            'erro': 'Plano inválido.',
-            'planos_validos': list(PLANOS_ADVOGO_SEGURO.keys())
-        }), 400
+        return jsonify({'erro': 'Plano inválido.', 'planos_validos': list(PLANOS_ADVOGO_SEGURO.keys())}), 400
 
-    escritorio = Escritorio.query.filter_by(email=email.strip().lower()).first()
-    if not escritorio:
-        return jsonify({'erro': f'Escritório {email} não encontrado'}), 404
-
-    dias_texto = request.args.get('dias', '').strip()
-    dias = None
-    if dias_texto:
+    if dias in ('', None):
+        dias = None
+    else:
         try:
-            dias = int(dias_texto)
-        except ValueError:
-            return jsonify({'erro': 'O parâmetro dias deve ser um número inteiro.'}), 400
+            dias = int(dias)
+        except (TypeError, ValueError):
+            return jsonify({'erro': 'O campo dias deve ser um número inteiro.'}), 400
         if dias < 1 or dias > 3650:
             return jsonify({'erro': 'Use um prazo entre 1 e 3650 dias.'}), 400
 
+    escritorio = Escritorio.query.filter_by(email=email).first()
+    if not escritorio:
+        return jsonify({'erro': 'Escritório não encontrado.'}), 404
+
     escritorio.plano = codigo
     if codigo == 'trial':
-        escritorio.plano_expira = datetime.utcnow() + timedelta(days=dias or 7)
+        escritorio.plano_expira = agora_utc() + timedelta(days=dias or 7)
     elif dias:
-        escritorio.plano_expira = datetime.utcnow() + timedelta(days=dias)
+        escritorio.plano_expira = agora_utc() + timedelta(days=dias)
     else:
         escritorio.plano_expira = None
     db.session.commit()
@@ -2387,38 +3415,42 @@ def admin_definir_plano(secret, email, codigo):
     })
 
 
-@app.route('/api/admin/ativar-pro/<secret>/<email>')
-def admin_ativar_pro(secret, email):
-    if secret != ADMIN_SECRET:
-        return 'Não autorizado', 403
-    escritorio = Escritorio.query.filter_by(email=email.strip().lower()).first()
+@app.route('/api/admin/ativar-pro', methods=['POST'])
+def admin_ativar_pro():
+    erro = _exigir_admin()
+    if erro:
+        return erro
+    data = request.get_json(silent=True) or {}
+    email = (data.get('email') or '').strip().lower()
+    if not email:
+        return jsonify({'erro': 'Informe o email do escritório.'}), 400
+    escritorio = Escritorio.query.filter_by(email=email).first()
     if not escritorio:
-        return f'Escritório {email} não encontrado', 404
-    escritorio.plano = 'pro'
-    escritorio.plano_expira = datetime.utcnow() + timedelta(days=365)
+        return jsonify({'erro': 'Escritório não encontrado.'}), 404
+    escritorio.plano = 'escritorio'
+    escritorio.plano_expira = agora_utc() + timedelta(days=365)
     db.session.commit()
-    return f'PRO ativado para {email}!'
+    return jsonify({
+        'ok': True,
+        'email': email,
+        'plano': 'escritorio',
+        'aviso': 'Endpoint legado mantido por compatibilidade; use /api/admin/definir-plano.',
+    })
 
 
-@app.route('/api/admin/listar-escritorios/<secret>')
-def admin_listar(secret):
-    if secret != ADMIN_SECRET:
-        return 'Não autorizado', 403
+@app.route('/api/admin/escritorios', methods=['GET'])
+def admin_listar():
+    erro = _exigir_admin()
+    if erro:
+        return erro
     lista = Escritorio.query.order_by(Escritorio.criado_em.desc()).all()
-    linhas = ''.join(
-        f"<tr><td>{e.id}</td><td>{e.nome}</td><td>{e.email}</td>"
-        f"<td>{e.plano}</td><td>{len(e.processos)}</td></tr>"
-        for e in lista
-    )
-    return f"""
-    <html><body style="font-family:Arial;padding:20px">
-    <h2>AdvogoSeguro — Escritórios cadastrados</h2>
-    <table border=1 cellpadding=8 style="border-collapse:collapse">
-    <tr><th>ID</th><th>Nome</th><th>Email</th><th>Plano</th><th>Processos</th></tr>
-    {linhas}
-    </table>
-    </body></html>
-    """
+    return jsonify([{
+        'id': e.id,
+        'nome': e.nome,
+        'email': e.email,
+        'plano': e.plano,
+        'processos': len(e.processos),
+    } for e in lista])
 
 
 # ──────────────────────────────────────────────
@@ -2437,6 +3469,49 @@ def home():
 @app.route('/verificar')
 def pagina_verificar_publico():
     return render_template('verificar_publico.html')
+
+
+@app.route('/privacidade')
+def pagina_privacidade():
+    return render_template(
+        'privacidade.html',
+        privacy_contact_email=PRIVACY_CONTACT_EMAIL,
+        retencao_logs_dias=LGPD_RETENCAO_LOGS_DIAS,
+    )
+
+
+def _catalogo_comercial_publico():
+    ordem = ('profissional', 'escritorio', 'blindagem', 'corporativo')
+    return [
+        {
+            'codigo': codigo,
+            'nome': PLANOS_ADVOGO_SEGURO[codigo]['nome'],
+            'preco_mensal': PLANOS_ADVOGO_SEGURO[codigo]['preco_mensal'],
+            'implantacao': PLANOS_ADVOGO_SEGURO[codigo]['implantacao'],
+            'limite_advogados': PLANOS_ADVOGO_SEGURO[codigo]['limite_advogados'],
+        }
+        for codigo in ordem
+    ]
+
+
+@app.route('/api/publico/planos', methods=['GET'])
+def api_planos_publicos():
+    return jsonify({
+        'trial_dias': 7,
+        'trial_limite_advogados': PLANOS_ADVOGO_SEGURO['trial']['limite_advogados'],
+        'planos': _catalogo_comercial_publico(),
+    })
+
+
+@app.route('/planos')
+def pagina_planos():
+    return render_template(
+        'planos.html',
+        planos=_catalogo_comercial_publico(),
+        trial_dias=7,
+        commercial_whatsapp=COMMERCIAL_WHATSAPP,
+        commercial_email=COMMERCIAL_EMAIL,
+    )
 
 
 @app.route('/vendas')
@@ -2535,7 +3610,24 @@ def pagina_cliente_alerta_token(token):
 
 @app.route('/api/health')
 def health():
-    return jsonify({'status': 'ok', 'timestamp': datetime.utcnow().isoformat()})
+    """Readiness check: serviço só é considerado pronto quando o banco responde."""
+    try:
+        db.session.execute(text('SELECT 1'))
+        return jsonify({
+            'status': 'ok',
+            'database': 'ok',
+            'version': APP_VERSION,
+            'timestamp': agora_utc().isoformat(),
+        })
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception('Health check falhou: banco indisponível.')
+        return jsonify({
+            'status': 'degraded',
+            'database': 'unavailable',
+            'version': APP_VERSION,
+            'timestamp': agora_utc().isoformat(),
+        }), 503
 
 
 @app.route('/api/status')
@@ -2554,7 +3646,16 @@ def api_status():
 with app.app_context():
     db.create_all()
     _garantir_colunas_novas()
+    _garantir_indices_banco()
+    _migrar_fotos_legadas_local_para_banco()
+    _migrar_ips_legados_para_hash()
+    _verificar_integridade_banco_local()
     print('[MIGRACAO] OK!')
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    porta = int(os.environ.get('PORT', '5000'))
+    debug_local = (
+        os.environ.get('FLASK_DEBUG', '0').strip().lower() in {'1', 'true', 'yes', 'on'}
+        and not IS_PRODUCTION
+    )
+    app.run(host='0.0.0.0', port=porta, debug=debug_local)

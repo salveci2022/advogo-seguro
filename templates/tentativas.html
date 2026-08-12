@@ -107,9 +107,7 @@ async function carregarTentativas() {
 
 async function gerarPdfTentativa(id) {
   try {
-    const resp = await fetch('/api/escritorio/relatorio/tentativa/' + id + '/pdf', {
-      headers: { 'Authorization': 'Bearer ' + Auth.getToken() }
-    });
+    const resp = await fetch('/api/escritorio/relatorio/tentativa/' + id + '/pdf', { credentials: 'same-origin', cache: 'no-store' });
     if (!resp.ok) throw new Error('Não foi possível gerar o PDF.');
     const blob = await resp.blob();
     window.open(URL.createObjectURL(blob), '_blank');
