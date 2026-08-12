@@ -32,11 +32,21 @@ def _delete(client, path, token=None, body=None):
 
 def registrar_escritorio(client, email='escritorio@teste.com'):
     resp = _post(client, '/api/escritorio/registro', body={
-        'nome': 'Escritorio Teste', 'email': email, 'senha': 'TesteSenha123!', 'cnpj': ''
+        'nome': 'Escritorio Teste',
+        'email': email,
+        'senha': 'TesteSenha123!',
+        'cnpj': ''
     })
     assert resp.status_code == 200, resp.get_json()
-    return resp.get_json()['token']
 
+    with appmodule.app.app_context():
+        escritorio = appmodule.Escritorio.query.filter_by(email=email).first()
+        assert escritorio is not None
+        escritorio.plano = 'profissional'
+        escritorio.plano_expira = None
+        appmodule.db.session.commit()
+
+    return resp.get_json()['token']
 
 def criar_advogado(client, token, nome='Dr. Fulano'):
     resp = _post(client, '/api/escritorio/advogados', token, {

@@ -8,12 +8,21 @@ import app as appmodule
 
 def registrar(client, email='foto-infra@teste.com'):
     resp = client.post('/api/escritorio/registro', json={
-        'nome': 'Escritório Foto', 'email': email, 'senha': 'SenhaFoto123!'
+        'nome': 'Escritorio Foto',
+        'email': email,
+        'senha': 'SenhaFoto123!'
     })
     assert resp.status_code == 200, resp.get_json()
+
+    with appmodule.app.app_context():
+        escritorio = appmodule.Escritorio.query.filter_by(email=email).first()
+        assert escritorio is not None
+        escritorio.plano = 'profissional'
+        escritorio.plano_expira = None
+        appmodule.db.session.commit()
+
     token = resp.get_json().get('token')
     return {'Authorization': f'Bearer {token}'}
-
 
 def criar_advogado(client, headers, telefone='61999993333'):
     resp = client.post('/api/escritorio/advogados', json={

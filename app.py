@@ -1219,7 +1219,7 @@ def registro_escritorio():
         nome=nome, email=email, cnpj=cnpj,
         senha_hash=hash_senha(senha),
         plano='trial',
-        plano_expira=agora_utc() + timedelta(days=7)
+        plano_expira=agora_utc()
     )
     db.session.add(escritorio)
     db.session.commit()
@@ -3497,7 +3497,7 @@ def _catalogo_comercial_publico():
 @app.route('/api/publico/planos', methods=['GET'])
 def api_planos_publicos():
     return jsonify({
-        'trial_dias': 7,
+        'trial_dias': 0,
         'trial_limite_advogados': PLANOS_ADVOGO_SEGURO['trial']['limite_advogados'],
         'planos': _catalogo_comercial_publico(),
     })
@@ -3508,7 +3508,7 @@ def pagina_planos():
     return render_template(
         'planos.html',
         planos=_catalogo_comercial_publico(),
-        trial_dias=7,
+        trial_dias=0,
         commercial_whatsapp=COMMERCIAL_WHATSAPP,
         commercial_email=COMMERCIAL_EMAIL,
     )

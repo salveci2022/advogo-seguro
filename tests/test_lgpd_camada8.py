@@ -30,13 +30,20 @@ def login_cliente(client, telefone):
 
 def registrar_escritorio(client, email='privacidade-escritorio@teste.com'):
     resp = client.post('/api/escritorio/registro', json={
-        'nome': 'Escritório Privacidade',
+        'nome': 'Escritorio Privacidade',
         'email': email,
         'senha': 'SenhaEscritorio123!',
     })
     assert resp.status_code == 200, resp.get_json()
-    return {'Authorization': f"Bearer {resp.get_json()['token']}"}
 
+    with appmodule.app.app_context():
+        escritorio = appmodule.Escritorio.query.filter_by(email=email).first()
+        assert escritorio is not None
+        escritorio.plano = 'profissional'
+        escritorio.plano_expira = None
+        appmodule.db.session.commit()
+
+    return {'Authorization': f"Bearer {resp.get_json()['token']}"}
 
 def test_aviso_privacidade_publico(client):
     resp = client.get('/privacidade')

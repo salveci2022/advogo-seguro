@@ -27,13 +27,20 @@ def put(client, path, body=None, token=None):
 
 def registrar(client, email='estabilidade@teste.com'):
     resp = post(client, '/api/escritorio/registro', {
-        'nome': 'Escritório Estabilidade',
+        'nome': 'Escritorio Estabilidade',
         'email': email,
         'senha': 'SenhaTeste123',
     })
     assert resp.status_code == 200, resp.get_json()
-    return resp.get_json()['token']
 
+    with appmodule.app.app_context():
+        escritorio = appmodule.Escritorio.query.filter_by(email=email).first()
+        assert escritorio is not None
+        escritorio.plano = 'profissional'
+        escritorio.plano_expira = None
+        appmodule.db.session.commit()
+
+    return resp.get_json()['token']
 
 def criar_advogado(client, token):
     resp = post(client, '/api/escritorio/advogados', {

@@ -24,16 +24,24 @@ def put(client, path, body=None, token=None):
     return client.put(path, json=body or {}, headers=headers)
 
 
-def registrar(client, email='camada1@teste.com'):
+def registrar(client, email='camada1@teste.com', ativar=True):
     resp = post(client, '/api/escritorio/registro', {
-        'nome': 'Escritório Camada 1',
+        'nome': 'Escritorio Camada 1',
         'email': email,
         'senha': 'SenhaTeste123',
         'cnpj': ''
     })
     assert resp.status_code == 200, resp.get_json()
-    return resp.get_json()
 
+    if ativar:
+        with appmodule.app.app_context():
+            escritorio = appmodule.Escritorio.query.filter_by(email=email).first()
+            assert escritorio is not None
+            escritorio.plano = 'profissional'
+            escritorio.plano_expira = None
+            appmodule.db.session.commit()
+
+    return resp.get_json()
 
 def criar_advogado(client, token, nome='Dra. Teste', telefone='61999990000'):
     resp = post(client, '/api/escritorio/advogados', {
@@ -56,10 +64,10 @@ def criar_processo(client, token, adv_id, telefone='61988887777', nome='Cliente 
     }, token)
 
 
-def test_registro_login_e_plano_trial(client):
-    cadastro = registrar(client)
+def test_registro_login_e_plano_inativo(client):
+    cadastro = registrar(client, ativar=False)
     assert cadastro['plano'] == 'trial'
-    assert cadastro['plano_ativo'] is True
+    assert cadastro['plano_ativo'] is False
 
     login = post(client, '/api/escritorio/login', {
         'email': 'camada1@teste.com', 'senha': 'SenhaTeste123'
@@ -70,7 +78,7 @@ def test_registro_login_e_plano_trial(client):
     plano = get(client, '/api/escritorio/plano', token).get_json()
     assert plano['codigo'] == 'trial'
     assert plano['limite_advogados'] == 1
-    assert plano['pode_adicionar_advogado'] is True
+    assert plano['pode_adicionar_advogado'] is False
 
 
 def test_email_duplicado_rejeitado(client):
@@ -81,7 +89,7 @@ def test_email_duplicado_rejeitado(client):
     assert resp.status_code == 409
 
 
-def test_limite_trial_de_um_advogado(client):
+def test_limite_profissional_de_um_advogado(client):
     token = registrar(client)['token']
     criar_advogado(client, token)
     resp = post(client, '/api/escritorio/advogados', {

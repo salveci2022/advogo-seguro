@@ -43,7 +43,7 @@ def test_pagina_e_api_planos_usam_fonte_unica_sem_placeholder(client):
     api = client.get('/api/publico/planos')
     assert api.status_code == 200
     dados = api.get_json()
-    assert dados['trial_dias'] == 7
+    assert dados['trial_dias'] == 0
     assert dados['trial_limite_advogados'] == 1
     assert [p['preco_mensal'] for p in dados['planos']] == [179.0, 497.0, 997.0, 1597.0]
 
@@ -66,18 +66,18 @@ def test_home_sidebar_e_url_antiga_apontam_para_planos(client):
     assert 'url=/planos' in antigo
 
 
-def test_trial_comercial_tem_sete_dias_e_um_advogado(client):
+def test_cadastro_comercial_nasce_inativo_sem_trial_gratuito(client):
     headers = registrar(client, 'trial-comercial@teste.com')
     plano = client.get('/api/escritorio/plano', headers=headers)
     assert plano.status_code == 200
     dados = plano.get_json()
     assert dados['codigo'] == 'trial'
     assert dados['limite_advogados'] == 1
-    assert dados['plano_ativo'] is True
+    assert dados['plano_ativo'] is False
     with appmodule.app.app_context():
         e = Escritorio.query.filter_by(email='trial-comercial@teste.com').first()
-        restante = e.plano_expira - appmodule.agora_utc()
-        assert timedelta(days=6, hours=23) < restante <= timedelta(days=7, minutes=1)
+        assert e.plano_expira is not None
+        assert e.plano_expira <= appmodule.agora_utc()
 
 
 def test_cancelado_nao_aparece_como_trial(client):

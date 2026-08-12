@@ -8,11 +8,20 @@ from conftest import appmodule
 
 def registrar(client, email='seguranca@teste.com', senha='SenhaSegura123'):
     resp = client.post('/api/escritorio/registro', json={
-        'nome': 'Escritório Segurança', 'email': email, 'senha': senha
+        'nome': 'Escritorio Seguranca',
+        'email': email,
+        'senha': senha
     })
     assert resp.status_code == 200, resp.get_json()
-    return resp
 
+    with appmodule.app.app_context():
+        escritorio = appmodule.Escritorio.query.filter_by(email=email).first()
+        assert escritorio is not None
+        escritorio.plano = 'profissional'
+        escritorio.plano_expira = None
+        appmodule.db.session.commit()
+
+    return resp
 
 def bearer(resp):
     token = resp.get_json().get('token')
