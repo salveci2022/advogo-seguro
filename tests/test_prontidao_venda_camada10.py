@@ -5,12 +5,12 @@ import app as appmodule
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_release_tem_versao_1_0_0_e_health_expoe_versao(client):
-    assert appmodule.APP_VERSION == '1.0.0'
+def test_release_tem_versao_1_1_0_e_health_expoe_versao(client):
+    assert appmodule.APP_VERSION == '1.1.0'
     resp = client.get('/api/health')
     assert resp.status_code == 200
     dados = resp.get_json()
-    assert dados['version'] == '1.0.0'
+    assert dados['version'] == '1.1.0'
     assert dados['status'] == 'ok'
     assert dados['database'] == 'ok'
 
@@ -36,9 +36,11 @@ def test_stack_producao_tem_gunicorn_postgresql_e_python_fixado():
 def test_render_declara_versao_healthcheck_e_variaveis_criticas():
     texto = (ROOT / 'render.yaml').read_text(encoding='utf-8')
     for item in (
-        'APP_VERSION', 'value: 1.0.0', 'healthCheckPath: /api/health',
+        'APP_VERSION', 'value: 1.1.0', 'healthCheckPath: /api/health',
         'DATABASE_URL', 'SECRET_KEY', 'JWT_SECRET',
         'PRIVACY_CONTACT_EMAIL', 'COMMERCIAL_WHATSAPP', 'COMMERCIAL_EMAIL',
+        'STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET', 'STRIPE_PRICE_MAP',
+        'TRIAL_DIAS', 'value: 2', 'COMMERCIAL_FLOW_ENABLED',
     ):
         assert item in texto
 
@@ -47,6 +49,7 @@ def test_paginas_publicas_essenciais_abrem(client):
     for rota in (
         '/', '/planos', '/privacidade', '/escritorio/login',
         '/escritorio/cadastro', '/cliente/login', '/verificar',
+        '/confirmar-email', '/contratacao', '/contratacao/sucesso',
     ):
         resp = client.get(rota)
         assert resp.status_code == 200, (rota, resp.status_code)

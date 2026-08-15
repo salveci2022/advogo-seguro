@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/logo-icone.svg') }}">
+  <title>Confirmar e-mail | ADVOGO SEGURO</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+<div class="auth-wrap">
+  <div class="auth-side">
+    <div class="brand" style="display:flex;align-items:center;gap:14px;font-weight:800;font-size:2rem;margin-bottom:36px;">
+      <img src="{{ url_for('static', filename='img/logo-icone.svg') }}" class="brand-logo" alt="ADVOGO SEGURO" style="height:56px;width:56px;">
+      ADVOGO SEGURO
+    </div>
+    <h2>Confirmação de acesso</h2>
+    <p>Enviamos um código de 6 dígitos para confirmar que o e-mail pertence ao responsável pelo escritório.</p>
+  </div>
+  <div class="auth-form-col">
+    <div class="auth-card">
+      <div class="sub">Confirme seu e-mail</div>
+      <div id="alertaConfirmacao" class="alert-box"></div>
+      <form id="formConfirmacao">
+        <div class="form-group">
+          <label for="email">E-mail</label>
+          <input type="email" class="form-control" id="email" required autocomplete="email">
+        </div>
+        <div class="form-group">
+          <label for="codigo">Código</label>
+          <input type="text" class="form-control" id="codigo" required inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="000000">
+        </div>
+        <button type="submit" class="btn-spy btn-spy-primary btn-spy-block" id="btnConfirmar">Validar código</button>
+      </form>
+      <button type="button" class="btn-spy btn-spy-ghost btn-spy-block" id="btnReenviar" style="margin-top:12px;">Reenviar código</button>
+      <div class="auth-foot"><a href="/escritorio/cadastro">← Refazer cadastro</a></div>
+    </div>
+  </div>
+</div>
+<script src="{{ url_for('static', filename='js/api.js') }}"></script>
+<script>
+const emailSalvo = sessionStorage.getItem('advogo_seguro_email_confirmacao') || new URLSearchParams(window.location.search).get('email') || '';
+document.getElementById('email').value = emailSalvo;
+const codigoDev = sessionStorage.getItem('advogo_seguro_codigo_dev');
+if (codigoDev && ['localhost', '127.0.0.1'].includes(window.location.hostname)) {
+  document.getElementById('codigo').value = codigoDev;
+}
+document.getElementById('formConfirmacao').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  hideAlert('alertaConfirmacao');
+  const btn = document.getElementById('btnConfirmar');
+  setLoading(btn, true, 'Validar código', 'Validando...');
+  try {
+    const data = await apiRequest('/api/comercial/confirmar-email', {
+      method: 'POST', auth: false,
+      body: {email: document.getElementById('email').value.trim(), codigo: document.getElementById('codigo').value.trim()}
+    });
+    Auth.setSession(data.token, 'escritorio', data.nome, data.plano);
+    sessionStorage.removeItem('advogo_seguro_codigo_dev');
+    window.location.href = data.proximo || '/contratacao';
+  } catch (err) {
+    showAlert('alertaConfirmacao', err.message, 'erro');
+  } finally {
+    setLoading(btn, false, 'Validar código');
+  }
+});
+document.getElementById('btnReenviar').addEventListener('click', async () => {
+  hideAlert('alertaConfirmacao');
+  const btn = document.getElementById('btnReenviar');
+  setLoading(btn, true, 'Reenviar código', 'Reenviando...');
+  try {
+    const data = await apiRequest('/api/comercial/reenviar-confirmacao', {
+      method: 'POST', auth: false, body: {email: document.getElementById('email').value.trim()}
+    });
+    if (data.codigo_dev && ['localhost', '127.0.0.1'].includes(window.location.hostname)) {
+      document.getElementById('codigo').value = data.codigo_dev;
+    }
+    showAlert('alertaConfirmacao', data.mensagem, 'sucesso');
+  } catch (err) {
+    showAlert('alertaConfirmacao', err.message, 'erro');
+  } finally {
+    setLoading(btn, false, 'Reenviar código');
+  }
+});
+</script>
+</body>
+</html>

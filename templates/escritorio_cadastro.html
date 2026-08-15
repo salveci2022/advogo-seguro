@@ -1,123 +1,71 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/logo-icone.svg') }}">
-<title>Cadastro do EscritÃ³rio â€” ADVOGO SEGURO</title>
-<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-
-<!-- AJUSTE-FONTES-CADASTRO-INICIO -->
-<style>
-.auth-side .brand {
-    font-size: 3rem !important;
-    font-weight: 800 !important;
-    line-height: 1.1 !important;
-    gap: 16px !important;
-    margin-bottom: 40px !important;
-}
-
-.auth-side .brand-logo {
-    width: 70px !important;
-    height: 70px !important;
-}
-
-.auth-side h2 {
-    font-size: clamp(2rem, 2.2vw, 2.8rem) !important;
-    line-height: 1.12 !important;
-    font-weight: 800 !important;
-    margin-bottom: 22px !important;
-}
-
-.auth-side p {
-    font-size: clamp(1rem, 1.05vw, 1.15rem) !important;
-    line-height: 1.7 !important;
-    max-width: 620px !important;
-    margin-bottom: 28px !important;
-}
-
-.auth-side .trust-item {
-    font-size: 1rem !important;
-    line-height: 1.5 !important;
-    margin-top: 14px !important;
-}
-
-.auth-side .trust-item .ic {
-    font-size: 1.15rem !important;
-    margin-right: 8px !important;
-}
-
-@media (max-width: 1100px) {
-    .auth-side .brand {
-        font-size: 2.5rem !important;
-    }
-
-    .auth-side .brand-logo {
-        width: 60px !important;
-        height: 60px !important;
-    }
-
-    .auth-side h2 {
-        font-size: 2rem !important;
-    }
-}
-
-@media (max-width: 900px) {
-    .auth-side .brand {
-        font-size: 2rem !important;
-    }
-
-    .auth-side h2 {
-        font-size: 1.75rem !important;
-    }
-}
-</style>
-<!-- AJUSTE-FONTES-CADASTRO-FIM -->
-
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Cadastre seu escritório no ADVOGO SEGURO e teste a proteção por 2 dias.">
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/logo-icone.svg') }}">
+  <title>Cadastro do Escritório | ADVOGO SEGURO</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
-
 <div class="auth-wrap">
   <div class="auth-side">
     <div class="brand" style="display:flex;align-items:center;gap:16px;font-weight:800;font-size:2rem;margin-bottom:36px;">
-      <img src="{{ url_for('static', filename='img/logo-icone.svg') }}" class="brand-logo" alt="ADVOGO SEGURO" style="height:56px; width:56px;"> ADVOGO SEGURO
+      <img src="{{ url_for('static', filename='img/logo-icone.svg') }}" class="brand-logo" alt="ADVOGO SEGURO" style="height:56px;width:56px;">
+      ADVOGO SEGURO
     </div>
-    <h2>Proteja seus clientes</h2>
-    <p>Cadastre seu escritÃ³rio e comece a emitir cÃ³digos Ãºnicos de verificaÃ§Ã£o para cada processo, protegendo seus clientes contra golpes em seu nome.</p>
-    <div class="trust-item"><span class="ic">âœ”</span><span>Cadastro seguro com ativaÃ§Ã£o apÃ³s contrataÃ§Ã£o</span></div>
-    <div class="trust-item"><span class="ic">âœ”</span><span>Planos claros e contrataÃ§Ã£o transparente</span></div>
+    <h2>Proteja seu escritório e seus clientes</h2>
+    <p>Crie sua conta, confirme o e-mail e conclua a contratação para iniciar o teste controlado.</p>
+    <div class="trust-item"><span class="ic">✔</span><span>Teste gratuito por 2 dias</span></div>
+    <div class="trust-item"><span class="ic">✔</span><span>Limite de 1 advogado, 1 cliente e 1 processo durante o teste</span></div>
+    <div class="trust-item"><span class="ic">✔</span><span>Após o teste, cobrança automática da mensalidade escolhida</span></div>
   </div>
 
   <div class="auth-form-col">
     <div class="auth-card">
-      <div class="brand" style="font-weight:800; font-size:1.1rem; display:flex; gap:8px; align-items:center;"><img src="{{ url_for('static', filename='img/logo-icone.svg') }}" class="brand-logo" alt="ADVOGO SEGURO"> ADVOGO SEGURO</div>
-      <div class="sub">Crie a conta do seu escritÃ³rio</div>
-
+      <div class="brand" style="font-weight:800;font-size:1.1rem;display:flex;gap:8px;align-items:center;">
+        <img src="{{ url_for('static', filename='img/logo-icone.svg') }}" class="brand-logo" alt="ADVOGO SEGURO">
+        ADVOGO SEGURO
+      </div>
+      <div class="sub">Crie a conta do seu escritório</div>
       <div id="alertaCadastro" class="alert-box"></div>
 
       <form id="formCadastro">
         <div class="form-group">
-          <label>Nome do escritÃ³rio</label>
-          <input type="text" class="form-control" id="nome" required placeholder="Ex: Silva &amp; Associados Advocacia">
+          <label for="plano">Plano escolhido</label>
+          <select class="form-control" id="plano" required>
+            <option value="profissional">Proteção Profissional — R$ 179/mês</option>
+            <option value="escritorio">Escritório Protegido — R$ 497/mês</option>
+            <option value="blindagem">Blindagem Jurídica — R$ 997/mês</option>
+          </select>
         </div>
         <div class="form-group">
-          <label>CNPJ</label>
-          <input type="text" class="form-control" id="cnpj" placeholder="00.000.000/0000-00">
+          <label for="nome">Nome do escritório</label>
+          <input type="text" class="form-control" id="nome" required maxlength="200" placeholder="Ex.: Silva &amp; Associados Advocacia">
         </div>
         <div class="form-group">
-          <label>E-mail</label>
-          <input type="email" class="form-control" id="email" required placeholder="contato@escritorio.com">
+          <label for="cnpj">CNPJ</label>
+          <input type="text" class="form-control" id="cnpj" required inputmode="numeric" maxlength="18" placeholder="00.000.000/0000-00">
         </div>
         <div class="form-group">
-          <label>Senha</label>
-          <input type="password" class="form-control" id="senha" required minlength="10" placeholder="MÃ­nimo 10 caracteres">
+          <label for="email">E-mail</label>
+          <input type="email" class="form-control" id="email" required maxlength="200" autocomplete="email" placeholder="contato@escritorio.com">
         </div>
-        <button type="submit" class="btn-spy btn-spy-primary btn-spy-block" id="btnCadastrar">Criar conta</button>
+        <div class="form-group">
+          <label for="senha">Senha</label>
+          <input type="password" class="form-control" id="senha" required minlength="10" autocomplete="new-password" placeholder="Mínimo de 10 caracteres">
+        </div>
+        <label style="display:flex;gap:10px;align-items:flex-start;font-size:.88rem;line-height:1.45;margin:8px 0 18px;">
+          <input type="checkbox" id="aceite" required style="margin-top:3px;">
+          <span>Li e aceito o <a href="/privacidade" target="_blank" rel="noopener">Aviso de Privacidade</a> e as condições do teste gratuito por 2 dias.</span>
+        </label>
+        <button type="submit" class="btn-spy btn-spy-primary btn-spy-block" id="btnCadastrar">Continuar</button>
       </form>
 
       <div class="auth-foot">
-        JÃ¡ tem uma conta? <a href="/escritorio/login">Fazer login</a><br>
-        <a href="/" style="color:var(--texto-suave); font-weight:500;">â† Voltar para o inÃ­cio</a>
+        Já tem uma conta? <a href="/escritorio/login">Fazer login</a><br>
+        <a href="/planos" style="color:var(--texto-suave);font-weight:500;">← Voltar aos planos</a>
       </div>
     </div>
   </div>
@@ -125,33 +73,38 @@
 
 <script src="{{ url_for('static', filename='js/api.js') }}"></script>
 <script>
-document.getElementById('formCadastro').addEventListener('submit', async (e) => {
-  e.preventDefault();
+const planoUrl = new URLSearchParams(window.location.search).get('plano');
+if (['profissional', 'escritorio', 'blindagem'].includes(planoUrl)) {
+  document.getElementById('plano').value = planoUrl;
+}
+
+document.getElementById('formCadastro').addEventListener('submit', async (event) => {
+  event.preventDefault();
   hideAlert('alertaCadastro');
   const btn = document.getElementById('btnCadastrar');
-  setLoading(btn, true, 'Criar conta', 'Criando...');
-
+  setLoading(btn, true, 'Continuar', 'Criando cadastro...');
   try {
-    const data = await apiRequest('/api/escritorio/registro', {
-      method: 'POST',
-      auth: false,
+    const data = await apiRequest('/api/comercial/registro', {
+      method: 'POST', auth: false,
       body: {
         nome: document.getElementById('nome').value.trim(),
         cnpj: document.getElementById('cnpj').value.trim(),
         email: document.getElementById('email').value.trim(),
-        senha: document.getElementById('senha').value
+        senha: document.getElementById('senha').value,
+        plano: document.getElementById('plano').value
       }
     });
-    Auth.setSession(data.token, 'escritorio', data.nome, data.plano);
-    window.location.href = '/escritorio/painel';
+    sessionStorage.setItem('advogo_seguro_email_confirmacao', data.email);
+    if (data.codigo_dev && ['localhost', '127.0.0.1'].includes(window.location.hostname)) {
+      sessionStorage.setItem('advogo_seguro_codigo_dev', data.codigo_dev);
+    }
+    window.location.href = '/confirmar-email';
   } catch (err) {
     showAlert('alertaCadastro', err.message, 'erro');
   } finally {
-    setLoading(btn, false, 'Criar conta');
+    setLoading(btn, false, 'Continuar');
   }
 });
 </script>
-<div style="text-align:center;padding:12px"><a href="/privacidade">Aviso de Privacidade</a></div>
 </body>
 </html>
-

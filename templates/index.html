@@ -3,9 +3,24 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="ADVOGO SEGURO protege escritórios de advocacia e clientes contra o golpe do falso advogado com contatos oficiais, verificação pública e Contato Seguro.">
+<meta name="robots" content="index,follow">
+<link rel="canonical" href="{{ public_base_url }}/">
 <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/logo-icone.svg') }}">
 <title>ADVOGO SEGURO — Sistema anti-golpe do falso advogado</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "ADVOGO SEGURO",
+  "applicationCategory": "SecurityApplication",
+  "operatingSystem": "Web",
+  "description": "Plataforma de verificação de contatos oficiais para prevenção ao golpe do falso advogado.",
+  "url": "{{ public_base_url }}/",
+  "provider": {"@type": "Organization", "name": "SPYNET Tecnologia Forense & Soluções Digitais Ltda."}
+}
+</script>
 </head>
 <body>
 
@@ -13,6 +28,7 @@
   <div class="container-narrow">
     <div class="brand"><img src="{{ url_for('static', filename='img/logo-icone.svg') }}" class="brand-logo" alt="ADVOGO SEGURO"> ADVOGO SEGURO</div>
     <nav>
+      <a href="/planos">Planos</a>
       <a href="/verificar">Verificar contato</a>
       <a href="/escritorio/login">Sou Escritório</a>
       <a href="/cliente/login">Sou Cliente</a>
@@ -30,7 +46,7 @@
       é realmente vinculado ao processo e ao advogado responsável pelo seu caso.
     </p>
     <div class="hero-actions">
-      <a href="/escritorio/cadastro" class="btn-spy btn-spy-primary">🏢 Solicitar demonstração</a>
+      <a href="/planos" class="btn-spy btn-spy-primary">🏢 Testar por 2 dias</a>
       <a href="/planos" class="btn-spy btn-spy-secondary">💳 Ver planos</a>
       <a href="/cliente/login" class="btn-spy btn-spy-outline">👤 Entrar como Cliente</a>
       <a href="/verificar" class="btn-spy btn-spy-outline">🔍 Verificar contato suspeito</a>

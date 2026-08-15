@@ -8,9 +8,12 @@
 | corporativo | Corporativo | a partir de R$ 1.597 | sob consulta | acima de 20 |
 
 ## Trial
-- 7 dias.
+- 2 dias (48 horas), calculados individualmente pelo servidor.
 - 1 advogado ativo.
-- O cadastro inicial já cria a conta nesse regime.
+- 1 cliente e 1 processo.
+- O teste só começa após confirmação do e-mail, conclusão do checkout e confirmação do pagamento da implantação.
+- Após o teste, a mensalidade do plano escolhido é cobrada automaticamente.
+- Um único teste por CNPJ.
 
 ## Recursos comprovados para comunicação comercial
 - cadastro de advogados, clientes e processos;
@@ -33,3 +36,10 @@
 A ativação automática exige `HOTMART_PLAN_MAP`.
 Produto não mapeado não concede plano.
 Eventos repetidos são tratados por ID único para não estender assinatura duas vezes.
+
+## Stripe
+- A integração usa Checkout hospedado e webhooks assinados.
+- O cartão não é armazenado no ADVOGO SEGURO.
+- `STRIPE_PRICE_MAP` relaciona cada plano aos preços mensal e de implantação.
+- Eventos repetidos são idempotentes e não estendem o teste.
+- Pagamento recusado bloqueia operações sem apagar dados do escritório.

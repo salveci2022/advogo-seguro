@@ -33,7 +33,9 @@
         <label>Plano atual</label>
         <input type="text" class="form-control" id="campoPlano" disabled>
       </div>
-      <p class="helper-text">Para alterar dados cadastrais ou de cobrança, entre em contato com o suporte SPYNET.</p>
+      <div id="alertaAssinatura" class="alert-box"></div>
+      <button type="button" class="btn-spy btn-spy-secondary" id="btnGerenciarAssinatura" style="display:none;">Gerenciar assinatura e pagamento</button>
+      <p class="helper-text">Dados de cartão são gerenciados no ambiente seguro do provedor de pagamento e não ficam armazenados no ADVOGO SEGURO.</p>
     </div>
 
     <div class="panel">
@@ -70,7 +72,7 @@
 Auth.requireTipo('escritorio', '/escritorio/login');
 document.getElementById('campoNome').value = Auth.getNome();
 const nomesPlano = {
-  trial: 'Aguardando contratação',
+  trial: 'Período de Teste',
   profissional: 'Proteção Profissional',
   escritorio: 'Escritório Protegido',
   blindagem: 'Blindagem Jurídica',
@@ -86,6 +88,30 @@ const nomesPlano = {
 const planoAtual = Auth.getPlano();
 document.getElementById('campoPlano').value =
   nomesPlano[planoAtual] || (planoAtual ? String(planoAtual).toUpperCase() : '—');
+
+async function configurarGerenciamentoAssinatura() {
+  try {
+    const status = await apiRequest('/api/comercial/status');
+    if (status.assinatura_gerenciavel) {
+      document.getElementById('btnGerenciarAssinatura').style.display = 'inline-flex';
+    }
+  } catch (_) {}
+}
+
+document.getElementById('btnGerenciarAssinatura').addEventListener('click', async () => {
+  hideAlert('alertaAssinatura');
+  const btn = document.getElementById('btnGerenciarAssinatura');
+  setLoading(btn, true, 'Gerenciar assinatura e pagamento', 'Abrindo...');
+  try {
+    const data = await apiRequest('/api/comercial/portal', {method: 'POST'});
+    window.location.href = data.portal_url;
+  } catch (err) {
+    showAlert('alertaAssinatura', err.message, 'erro');
+    setLoading(btn, false, 'Gerenciar assinatura e pagamento');
+  }
+});
+
+configurarGerenciamentoAssinatura();
 
 document.getElementById('formSenha').addEventListener('submit', async (e) => {
   e.preventDefault();

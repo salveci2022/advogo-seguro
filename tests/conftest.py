@@ -26,6 +26,8 @@ db = appmodule.db
 @pytest.fixture()
 def client():
     flask_app.config['TESTING'] = True
+    appmodule._tentativas_login.clear()
+    appmodule._tentativas_acoes.clear()
     with flask_app.app_context():
         db.drop_all()
         db.create_all()

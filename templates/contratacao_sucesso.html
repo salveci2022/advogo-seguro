@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/logo-icone.svg') }}">
+  <title>Contratação recebida | ADVOGO SEGURO</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body style="background:var(--cinza-claro);">
+<main class="container-narrow" style="padding:70px 20px;max-width:720px;">
+  <div class="panel" style="text-align:center;">
+    <div style="font-size:3rem;">🛡️</div>
+    <h1>Contratação recebida</h1>
+    <div id="alertaSucesso" class="alert-box show alert-sucesso">Validando a assinatura e liberando o teste...</div>
+    <p style="color:var(--texto-suave);line-height:1.7;">O teste gratuito por 2 dias será liberado após a confirmação segura do pagamento da implantação.</p>
+    <a href="/escritorio/painel" class="btn-spy btn-spy-primary" id="btnPainel" style="display:none;">Acessar o painel</a>
+  </div>
+</main>
+<script src="{{ url_for('static', filename='js/api.js') }}"></script>
+<script>
+Auth.requireTipo('escritorio', '/escritorio/login');
+const sessionId = new URLSearchParams(window.location.search).get('session_id');
+async function sincronizar() {
+  if (!sessionId) {
+    showAlert('alertaSucesso', 'Sessão de pagamento não identificada.', 'erro');
+    return;
+  }
+  try {
+    const data = await apiRequest('/api/comercial/checkout/sincronizar', {method: 'POST', body: {session_id: sessionId}});
+    if (data.ok) {
+      showAlert('alertaSucesso', 'Pagamento confirmado. Seu teste gratuito por 2 dias está ativo.', 'sucesso');
+      Auth.setSession(null, 'escritorio', Auth.getNome(), data.plano);
+      document.getElementById('btnPainel').style.display = 'inline-flex';
+    } else {
+      showAlert('alertaSucesso', data.erro || 'A ativação ainda está sendo processada.', 'sucesso');
+    }
+  } catch (err) {
+    showAlert('alertaSucesso', err.message, 'erro');
+  }
+}
+sincronizar();
+</script>
+</body>
+</html>

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/logo-icone.svg') }}">
+  <title>Contratação | ADVOGO SEGURO</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body style="background:var(--cinza-claro);">
+<main class="container-narrow" style="padding:50px 20px;max-width:780px;">
+  <div class="panel">
+    <div class="panel-head"><h1 style="font-size:1.8rem;">Concluir contratação</h1></div>
+    <div id="alertaContratacao" class="alert-box"></div>
+    <div id="resumoPlano" style="line-height:1.7;color:var(--texto-suave);">Carregando plano...</div>
+    <div style="margin:24px 0;padding:18px;border-radius:12px;background:#f5f8fc;line-height:1.65;">
+      <strong>Como funciona</strong><br>
+      A taxa de implantação é cobrada no início. O teste gratuito dura 2 dias. Após esse período, será cobrada automaticamente a mensalidade do plano escolhido.
+    </div>
+    <label style="display:flex;gap:10px;align-items:flex-start;line-height:1.5;margin-bottom:20px;">
+      <input type="checkbox" id="aceiteCobranca" style="margin-top:4px;">
+      <span>Confirmo que li os valores do plano, a cobrança da implantação, o teste gratuito por 2 dias e a cobrança recorrente após o teste.</span>
+    </label>
+    <button class="btn-spy btn-spy-primary btn-spy-block" id="btnPagamento">Ir para pagamento seguro</button>
+    <a href="/planos" class="btn-spy btn-spy-ghost btn-spy-block" style="margin-top:12px;">Voltar aos planos</a>
+  </div>
+</main>
+<script src="{{ url_for('static', filename='js/api.js') }}"></script>
+<script>
+Auth.requireTipo('escritorio', '/escritorio/login');
+let planoSelecionado = null;
+function escapeHtml(valor) {
+  const el = document.createElement('div');
+  el.textContent = String(valor || '');
+  return el.innerHTML;
+}
+async function carregarContratacao() {
+  try {
+    const [status, catalogo] = await Promise.all([
+      apiRequest('/api/comercial/status'), apiRequest('/api/publico/planos', {auth: false})
+    ]);
+    planoSelecionado = status.plano_pretendido;
+    const plano = catalogo.planos.find(item => item.codigo === planoSelecionado);
+    if (!plano) throw new Error('Plano não encontrado. Volte à página de planos.');
+    document.getElementById('resumoPlano').innerHTML =
+      `<h2>${escapeHtml(plano.nome)}</h2>` +
+      `<strong>Mensalidade:</strong> R$ ${Number(plano.preco_mensal).toLocaleString('pt-BR', {minimumFractionDigits: 2})}<br>` +
+      `<strong>Implantação:</strong> R$ ${Number(plano.implantacao).toLocaleString('pt-BR', {minimumFractionDigits: 2})}<br>` +
+      `<strong>Teste:</strong> 2 dias`;
+    if (new URLSearchParams(window.location.search).get('cancelado')) {
+      showAlert('alertaContratacao', 'Pagamento não concluído. Nenhuma assinatura foi ativada.', 'erro');
+    }
+  } catch (err) {
+    showAlert('alertaContratacao', err.message, 'erro');
+    document.getElementById('btnPagamento').disabled = true;
+  }
+}
+document.getElementById('btnPagamento').addEventListener('click', async () => {
+  if (!document.getElementById('aceiteCobranca').checked) {
+    showAlert('alertaContratacao', 'Confirme as condições da contratação para continuar.', 'erro');
+    return;
+  }
+  const btn = document.getElementById('btnPagamento');
+  setLoading(btn, true, 'Ir para pagamento seguro', 'Abrindo pagamento...');
+  try {
+    const data = await apiRequest('/api/comercial/checkout', {method: 'POST', body: {plano: planoSelecionado}});
+    window.location.href = data.checkout_url;
+  } catch (err) {
+    showAlert('alertaContratacao', err.message, 'erro');
+    setLoading(btn, false, 'Ir para pagamento seguro');
+  }
+});
+carregarContratacao();
+</script>
+</body>
+</html>

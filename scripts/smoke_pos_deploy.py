@@ -13,8 +13,12 @@ rotas = [
     ("/api/health", 200),
     ("/", 200),
     ("/planos", 200),
+    ("/robots.txt", 200),
+    ("/sitemap.xml", 200),
     ("/privacidade", 200),
     ("/escritorio/login", 200),
+    ("/escritorio/cadastro", 200),
+    ("/confirmar-email", 200),
     ("/cliente/login", 200),
 ]
 

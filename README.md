@@ -29,6 +29,10 @@ http://127.0.0.1:5000/api/health
 - `GET /api/cliente/processos`
 - `POST /api/cliente/verificar`
 - `POST /webhook/hotmart`
+- `POST /api/comercial/registro`
+- `POST /api/comercial/confirmar-email`
+- `POST /api/comercial/checkout`
+- `POST /webhook/stripe`
 
 ## Deploy Render
 
@@ -47,6 +51,13 @@ Configure as variáveis de ambiente no Render:
 - `ADMIN_SECRET`
 - `HOTMART_WEBHOOK_TOKEN`
 - `DATABASE_URL`
+- `STRIPE_SECRET_KEY`
+- `STRIPE_WEBHOOK_SECRET`
+- `STRIPE_PRICE_MAP`
+
+## Fluxo comercial 1.1.0
+
+Novos cadastros confirmam o e-mail, concluem o Checkout da Stripe e recebem teste controlado por 2 dias. A implantação é cobrada no início; a mensalidade recorrente começa após o teste. Contas antigas e o webhook Hotmart permanecem compatíveis.
 
 ## Recuperação de senha por e-mail
 

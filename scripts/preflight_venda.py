@@ -6,6 +6,10 @@ import sys
 def presente(nome):
     return bool(os.environ.get(nome, "").strip())
 
+
+def habilitado(nome):
+    return os.environ.get(nome, "").strip().lower() in {"1", "true", "yes", "on"}
+
 erros = []
 avisos = []
 
@@ -40,8 +44,34 @@ if presente("SMTP_HOST"):
 else:
     avisos.append("SMTP: recuperação por e-mail não configurada")
 
+if habilitado("COMMERCIAL_FLOW_ENABLED"):
+    if os.environ.get("TRIAL_DIAS", "").strip() != "2":
+        erros.append("TRIAL_DIAS: deve ser 2")
+    for nome in ("STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "STRIPE_PRICE_MAP"):
+        if not presente(nome):
+            erros.append(f"{nome}: AUSENTE com fluxo comercial habilitado")
+    if not presente("SMTP_HOST"):
+        erros.append("SMTP_HOST: AUSENTE com confirmação de e-mail habilitada")
+    bruto_stripe = os.environ.get("STRIPE_PRICE_MAP", "").strip()
+    if bruto_stripe:
+        try:
+            mapa_stripe = json.loads(bruto_stripe)
+            esperados = {"profissional", "escritorio", "blindagem"}
+            if not isinstance(mapa_stripe, dict) or set(mapa_stripe) != esperados:
+                erros.append("STRIPE_PRICE_MAP: configure exatamente os três planos online")
+            elif any(not isinstance(precos, dict) for precos in mapa_stripe.values()):
+                erros.append("STRIPE_PRICE_MAP: cada plano deve conter mensal e implantacao")
+            elif any(
+                not str(precos.get(chave, "")).startswith("price_")
+                for precos in mapa_stripe.values()
+                for chave in ("mensal", "implantacao")
+            ):
+                erros.append("STRIPE_PRICE_MAP: IDs devem começar com price_")
+        except (json.JSONDecodeError, AttributeError):
+            erros.append("STRIPE_PRICE_MAP: JSON inválido")
+
 print("ADVOGO SEGURO — PREFLIGHT DE VENDA")
-print("APP_VERSION:", os.environ.get("APP_VERSION", "1.0.0"))
+print("APP_VERSION:", os.environ.get("APP_VERSION", "1.1.0"))
 for item in avisos:
     print("AVISO:", item)
 

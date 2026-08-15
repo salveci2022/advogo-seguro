@@ -33,6 +33,7 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 import jwt
+import stripe
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -43,12 +44,19 @@ from reportlab.lib.enums import TA_CENTER
 import io as io_module
 
 
-APP_VERSION = os.environ.get('APP_VERSION', '1.0.0').strip() or '1.0.0'
+APP_VERSION = os.environ.get('APP_VERSION', '1.1.0').strip() or '1.1.0'
 
 
 def agora_utc():
     """UTC sem timezone para manter compatibilidade com colunas DateTime atuais."""
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _env_bool(nome, padrao=False):
+    valor = os.environ.get(nome)
+    if valor is None:
+        return bool(padrao)
+    return valor.strip().lower() in {'1', 'true', 'yes', 'on'}
 
 # ──────────────────────────────────────────────
 # CONFIGURAÇÃO BASE
@@ -129,6 +137,12 @@ HOTMART_WEBHOOK_TOKEN = os.environ.get('HOTMART_WEBHOOK_TOKEN', '').strip()
 HOTMART_PLAN_MAP_RAW = os.environ.get('HOTMART_PLAN_MAP', '').strip()
 COMMERCIAL_WHATSAPP = re.sub(r'\D', '', os.environ.get('COMMERCIAL_WHATSAPP', ''))
 COMMERCIAL_EMAIL = os.environ.get('COMMERCIAL_EMAIL', '').strip()
+COMMERCIAL_FLOW_ENABLED = _env_bool('COMMERCIAL_FLOW_ENABLED', IS_PRODUCTION)
+TRIAL_DIAS = int(os.environ.get('TRIAL_DIAS', '2'))
+EMAIL_CONFIRMATION_TTL_MINUTES = int(os.environ.get('EMAIL_CONFIRMATION_TTL_MINUTES', '15'))
+STRIPE_SECRET_KEY = os.environ.get('STRIPE_SECRET_KEY', '').strip()
+STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET', '').strip()
+STRIPE_PRICE_MAP_RAW = os.environ.get('STRIPE_PRICE_MAP', '').strip()
 RESET_TOKEN_TTL_MINUTOS = 30
 CONTATO_SEGURO_TTL_MINUTOS = int(os.environ.get('CONTATO_SEGURO_TTL_MINUTOS', '10'))
 JWT_TTL_HORAS = int(os.environ.get('JWT_TTL_HORAS', '12'))
@@ -150,6 +164,12 @@ PRIVACY_CONTACT_EMAIL = os.environ.get('PRIVACY_CONTACT_EMAIL', '').strip()
 LGPD_RETENCAO_LOGS_DIAS = int(os.environ.get('LGPD_RETENCAO_LOGS_DIAS', '0'))
 if LGPD_RETENCAO_LOGS_DIAS < 0:
     raise RuntimeError('LGPD_RETENCAO_LOGS_DIAS não pode ser negativo.')
+if TRIAL_DIAS != 2:
+    raise RuntimeError('TRIAL_DIAS deve permanecer em 2 conforme a regra comercial vigente.')
+if EMAIL_CONFIRMATION_TTL_MINUTES < 5 or EMAIL_CONFIRMATION_TTL_MINUTES > 60:
+    raise RuntimeError('EMAIL_CONFIRMATION_TTL_MINUTES deve ficar entre 5 e 60 minutos.')
+
+stripe.api_key = STRIPE_SECRET_KEY or None
 
 
 # ──────────────────────────────────────────────
@@ -230,6 +250,38 @@ def _carregar_mapa_hotmart(valor):
 
 
 HOTMART_PLAN_MAP = _carregar_mapa_hotmart(HOTMART_PLAN_MAP_RAW)
+
+
+def _carregar_mapa_stripe(valor):
+    if not (valor or '').strip():
+        return {}
+    try:
+        bruto = json.loads(valor)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError('STRIPE_PRICE_MAP deve ser um JSON válido.') from exc
+    if not isinstance(bruto, dict):
+        raise RuntimeError('STRIPE_PRICE_MAP deve ser um objeto JSON.')
+
+    mapa = {}
+    for codigo_bruto, precos_brutos in bruto.items():
+        codigo = PLANOS_LEGADOS.get(str(codigo_bruto).strip().lower(), str(codigo_bruto).strip().lower())
+        if codigo not in PLANOS_ADVOGO_SEGURO or codigo in {'trial', 'corporativo'}:
+            raise RuntimeError(
+                'STRIPE_PRICE_MAP aceita somente profissional, escritorio e blindagem.'
+            )
+        if not isinstance(precos_brutos, dict):
+            raise RuntimeError(f'Preços Stripe inválidos para o plano {codigo}.')
+        mensal = str(precos_brutos.get('mensal') or '').strip()
+        implantacao = str(precos_brutos.get('implantacao') or '').strip()
+        if not mensal.startswith('price_') or not implantacao.startswith('price_'):
+            raise RuntimeError(
+                f'O plano {codigo} precisa dos IDs Stripe mensal e implantacao.'
+            )
+        mapa[codigo] = {'mensal': mensal, 'implantacao': implantacao}
+    return mapa
+
+
+STRIPE_PRICE_MAP = _carregar_mapa_stripe(STRIPE_PRICE_MAP_RAW)
 
 
 def normalizar_codigo_plano(codigo):
@@ -388,6 +440,9 @@ class Escritorio(db.Model):
     __tablename__ = 'escritorios'
     __table_args__ = (
         db.Index('ix_escritorios_reset_token', 'reset_token'),
+        db.Index('ix_escritorios_email_confirmacao_token', 'email_confirmacao_token_hash'),
+        db.Index('ux_escritorios_stripe_customer', 'stripe_customer_id', unique=True),
+        db.Index('ux_escritorios_stripe_subscription', 'stripe_subscription_id', unique=True),
     )
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(200), nullable=False)
@@ -399,6 +454,17 @@ class Escritorio(db.Model):
     criado_em = db.Column(db.DateTime, default=agora_utc)
     reset_token = db.Column(db.String(100))
     reset_token_expira = db.Column(db.DateTime)
+    email_confirmacao_obrigatoria = db.Column(db.Boolean, default=False, nullable=False)
+    email_confirmado_em = db.Column(db.DateTime)
+    email_confirmacao_token_hash = db.Column(db.String(64))
+    email_confirmacao_expira = db.Column(db.DateTime)
+    plano_pretendido = db.Column(db.String(20))
+    assinatura_status = db.Column(db.String(30), default='sem_assinatura', nullable=False)
+    stripe_customer_id = db.Column(db.String(120))
+    stripe_subscription_id = db.Column(db.String(120))
+    stripe_checkout_session_id = db.Column(db.String(120))
+    trial_utilizado_em = db.Column(db.DateTime)
+    taxa_implantacao_paga_em = db.Column(db.DateTime)
 
     advogados = db.relationship('Advogado', backref='escritorio', lazy=True)
     processos = db.relationship('Processo', backref='escritorio', lazy=True)
@@ -406,6 +472,11 @@ class Escritorio(db.Model):
     def plano_ativo(self):
         codigo_original = (self.plano or 'trial').strip().lower()
         codigo_normalizado = normalizar_codigo_plano(codigo_original)
+
+        if self.stripe_subscription_id and self.assinatura_status in {
+            'incomplete', 'incomplete_expired', 'past_due', 'unpaid', 'paused', 'canceled'
+        }:
+            return False
 
         if codigo_normalizado == 'trial':
             return bool(self.plano_expira and self.plano_expira > agora_utc())
@@ -428,6 +499,9 @@ class Escritorio(db.Model):
     def limite_advogados(self):
         _, config = self.config_plano()
         return config['limite_advogados']
+
+    def email_confirmado(self):
+        return not self.email_confirmacao_obrigatoria or bool(self.email_confirmado_em)
 
 
 class Advogado(db.Model):
@@ -644,6 +718,17 @@ def _garantir_colunas_novas():
         ('advogados', 'foto_mime', 'VARCHAR(50)'),
         ('advogados', 'foto_token', 'VARCHAR(64)'),
         ('clientes', 'ativo', 'BOOLEAN NOT NULL DEFAULT TRUE'),
+        ('escritorios', 'email_confirmacao_obrigatoria', 'BOOLEAN NOT NULL DEFAULT FALSE'),
+        ('escritorios', 'email_confirmado_em', 'TIMESTAMP'),
+        ('escritorios', 'email_confirmacao_token_hash', 'VARCHAR(64)'),
+        ('escritorios', 'email_confirmacao_expira', 'TIMESTAMP'),
+        ('escritorios', 'plano_pretendido', 'VARCHAR(20)'),
+        ('escritorios', 'assinatura_status', "VARCHAR(30) NOT NULL DEFAULT 'sem_assinatura'"),
+        ('escritorios', 'stripe_customer_id', 'VARCHAR(120)'),
+        ('escritorios', 'stripe_subscription_id', 'VARCHAR(120)'),
+        ('escritorios', 'stripe_checkout_session_id', 'VARCHAR(120)'),
+        ('escritorios', 'trial_utilizado_em', 'TIMESTAMP'),
+        ('escritorios', 'taxa_implantacao_paga_em', 'TIMESTAMP'),
     ]
     for tabela, coluna, definicao_sql in colunas_necessarias:
         if not inspetor.has_table(tabela):
@@ -661,6 +746,7 @@ def _garantir_indices_banco():
     inspetor = inspect(db.engine)
     indices = [
         ('escritorios', 'ix_escritorios_reset_token', 'reset_token'),
+        ('escritorios', 'ix_escritorios_email_confirmacao_token', 'email_confirmacao_token_hash'),
         ('advogados', 'ix_advogados_escritorio_ativo', 'escritorio_id, ativo'),
         ('advogados', 'ix_advogados_escritorio_oab', 'escritorio_id, oab'),
         ('clientes', 'ix_clientes_reset_token', 'reset_token'),
@@ -707,6 +793,16 @@ def _garantir_indices_banco():
                     'o índice único não foi criado. Corrija as duplicidades antes do deploy.',
                     duplicados,
                 )
+
+        if inspetor.has_table('escritorios'):
+            conexao.execute(text(
+                'CREATE UNIQUE INDEX IF NOT EXISTS ux_escritorios_stripe_customer '
+                'ON escritorios (stripe_customer_id)'
+            ))
+            conexao.execute(text(
+                'CREATE UNIQUE INDEX IF NOT EXISTS ux_escritorios_stripe_subscription '
+                'ON escritorios (stripe_subscription_id)'
+            ))
 
 
 def _verificar_integridade_banco_local():
@@ -982,21 +1078,9 @@ def _smtp_configurado():
     return bool(SMTP_HOST and SMTP_PORT and SMTP_FROM)
 
 
-def enviar_email_redefinicao_escritorio(destinatario, link_absoluto):
-    """Envia o link de redefinição. Retorna True quando o SMTP aceitou a mensagem."""
+def _enviar_mensagem_smtp(mensagem):
     if not _smtp_configurado():
         return False
-
-    mensagem = EmailMessage()
-    mensagem['Subject'] = 'ADVOGO SEGURO — redefinição de senha'
-    mensagem['From'] = SMTP_FROM
-    mensagem['To'] = destinatario
-    mensagem.set_content(
-        'Recebemos uma solicitação para redefinir a senha do seu escritório no ADVOGO SEGURO.\n\n'
-        f'Acesse o link abaixo. Ele expira em {RESET_TOKEN_TTL_MINUTOS} minutos:\n{link_absoluto}\n\n'
-        'Se você não solicitou a redefinição, ignore esta mensagem.'
-    )
-
     contexto_ssl = ssl.create_default_context()
     if SMTP_SECURITY == 'ssl':
         with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=15, context=contexto_ssl) as servidor:
@@ -1013,6 +1097,35 @@ def enviar_email_redefinicao_escritorio(destinatario, link_absoluto):
                 servidor.login(SMTP_USER, SMTP_PASSWORD)
             servidor.send_message(mensagem)
     return True
+
+
+def enviar_email_redefinicao_escritorio(destinatario, link_absoluto):
+    """Envia o link de redefinição. Retorna True quando o SMTP aceitou a mensagem."""
+    mensagem = EmailMessage()
+    mensagem['Subject'] = 'ADVOGO SEGURO — redefinição de senha'
+    mensagem['From'] = SMTP_FROM
+    mensagem['To'] = destinatario
+    mensagem.set_content(
+        'Recebemos uma solicitação para redefinir a senha do seu escritório no ADVOGO SEGURO.\n\n'
+        f'Acesse o link abaixo. Ele expira em {RESET_TOKEN_TTL_MINUTOS} minutos:\n{link_absoluto}\n\n'
+        'Se você não solicitou a redefinição, ignore esta mensagem.'
+    )
+    return _enviar_mensagem_smtp(mensagem)
+
+
+def enviar_email_confirmacao_escritorio(destinatario, codigo):
+    mensagem = EmailMessage()
+    mensagem['Subject'] = 'ADVOGO SEGURO — confirme seu e-mail'
+    mensagem['From'] = SMTP_FROM
+    mensagem['To'] = destinatario
+    mensagem.set_content(
+        'Confirme o cadastro do seu escritório no ADVOGO SEGURO.\n\n'
+        f'Código de confirmação: {codigo}\n\n'
+        f'O código expira em {EMAIL_CONFIRMATION_TTL_MINUTES} minutos. '
+        'Depois da confirmação, conclua a contratação para iniciar o teste gratuito por 2 dias.\n\n'
+        'Se você não realizou este cadastro, ignore esta mensagem.'
+    )
+    return _enviar_mensagem_smtp(mensagem)
 
 
 @app.route('/api/logout', methods=['POST'])
@@ -1201,9 +1314,213 @@ def gerar_link_reset_cliente(cliente_id):
 # ROTAS — ESCRITÓRIO (B2B)
 # ──────────────────────────────────────────────
 
+def _somente_digitos(valor):
+    return re.sub(r'\D', '', str(valor or ''))
+
+
+def _hash_codigo_confirmacao(codigo):
+    return hashlib.sha256(str(codigo).encode('utf-8')).hexdigest()
+
+
+def _gerar_codigo_confirmacao():
+    return f'{secrets.randbelow(1_000_000):06d}'
+
+
+def _cnpj_ja_cadastrado(cnpj_normalizado):
+    if not cnpj_normalizado:
+        return False
+    for escritorio in Escritorio.query.filter(Escritorio.cnpj.isnot(None)).all():
+        if _somente_digitos(escritorio.cnpj) == cnpj_normalizado:
+            if (
+                not escritorio.email_confirmacao_obrigatoria
+                or escritorio.email_confirmado_em
+                or escritorio.trial_utilizado_em
+                or normalizar_codigo_plano(escritorio.plano) != 'trial'
+            ):
+                return True
+    return False
+
+
+def _outro_escritorio_ja_usou_beneficio(cnpj_normalizado, escritorio_id):
+    for escritorio in Escritorio.query.filter(Escritorio.id != escritorio_id).all():
+        if _somente_digitos(escritorio.cnpj) != cnpj_normalizado:
+            continue
+        if (
+            escritorio.trial_utilizado_em
+            or escritorio.assinatura_status in {'trialing', 'active'}
+            or (
+                normalizar_codigo_plano(escritorio.plano) != 'trial'
+                and escritorio.plano_ativo()
+            )
+        ):
+            return True
+    return False
+
+
+def _registrar_escritorio_comercial(data):
+    nome = (data.get('nome') or '').strip()
+    email = (data.get('email') or '').strip().lower()
+    senha = data.get('senha') or ''
+    cnpj = _somente_digitos(data.get('cnpj'))
+    plano = normalizar_codigo_plano(data.get('plano'))
+
+    permitido, espera = verificar_limite_acao(
+        f'registro-comercial:{request.remote_addr or "desconhecido"}',
+        max_tentativas=5,
+        janela_segundos=3600,
+    )
+    if not permitido:
+        return jsonify({'erro': f'Muitos cadastros. Tente novamente em {espera} segundos.'}), 429
+
+    if not nome or not email or len(senha) < SENHA_MIN_CARACTERES:
+        return jsonify({
+            'erro': f'Preencha nome, e-mail e senha (mín. {SENHA_MIN_CARACTERES} caracteres).'
+        }), 400
+    if len(cnpj) != 14:
+        return jsonify({'erro': 'Informe um CNPJ válido com 14 dígitos.'}), 400
+    if plano not in {'profissional', 'escritorio', 'blindagem'}:
+        return jsonify({'erro': 'Escolha um plano disponível para contratação online.'}), 400
+    if Escritorio.query.filter_by(email=email).first():
+        return jsonify({'erro': 'E-mail já cadastrado.'}), 409
+    if _cnpj_ja_cadastrado(cnpj):
+        return jsonify({'erro': 'Este CNPJ já possui cadastro no ADVOGO SEGURO.'}), 409
+
+    codigo = _gerar_codigo_confirmacao()
+    escritorio = Escritorio(
+        nome=nome,
+        email=email,
+        cnpj=cnpj,
+        senha_hash=hash_senha(senha),
+        plano='trial',
+        plano_expira=agora_utc(),
+        plano_pretendido=plano,
+        assinatura_status='aguardando_email',
+        email_confirmacao_obrigatoria=True,
+        email_confirmacao_token_hash=_hash_codigo_confirmacao(codigo),
+        email_confirmacao_expira=(
+            agora_utc() + timedelta(minutes=EMAIL_CONFIRMATION_TTL_MINUTES)
+        ),
+    )
+    db.session.add(escritorio)
+    db.session.commit()
+
+    email_enviado = False
+    try:
+        email_enviado = enviar_email_confirmacao_escritorio(email, codigo)
+    except (OSError, smtplib.SMTPException):
+        app.logger.exception('Falha ao enviar confirmação para escritorio_id=%s.', escritorio.id)
+
+    resposta = {
+        'ok': True,
+        'email': email,
+        'plano': plano,
+        'confirmacao_email': True,
+        'email_enviado': email_enviado,
+        'mensagem': (
+            'Enviamos um código de confirmação para o seu e-mail.'
+            if email_enviado else
+            'Cadastro criado. O envio do código está temporariamente indisponível; tente reenviar.'
+        ),
+    }
+    if not IS_PRODUCTION:
+        resposta['codigo_dev'] = codigo
+    return jsonify(resposta), 201
+
+
+@app.route('/api/comercial/registro', methods=['POST'])
+def registro_escritorio_comercial():
+    return _registrar_escritorio_comercial(request.get_json(silent=True) or {})
+
+
+@app.route('/api/comercial/confirmar-email', methods=['POST'])
+def confirmar_email_comercial():
+    data = request.get_json(silent=True) or {}
+    email = (data.get('email') or '').strip().lower()
+    codigo = _somente_digitos(data.get('codigo'))
+
+    permitido, espera = verificar_limite_acao(
+        f'confirmar-email:{email}', max_tentativas=8, janela_segundos=900
+    )
+    if not permitido:
+        return jsonify({'erro': f'Muitas tentativas. Tente novamente em {espera} segundos.'}), 429
+    if not email or len(codigo) != 6:
+        return jsonify({'erro': 'Informe o e-mail e o código de 6 dígitos.'}), 400
+
+    escritorio = Escritorio.query.filter_by(email=email).first()
+    if not escritorio or not escritorio.email_confirmacao_obrigatoria:
+        return jsonify({'erro': 'Não foi possível confirmar este cadastro.'}), 400
+    if escritorio.email_confirmado_em:
+        return _resposta_com_sessao({
+            'ok': True,
+            'nome': escritorio.nome,
+            'plano': escritorio.plano,
+            'plano_pretendido': escritorio.plano_pretendido,
+            'proximo': '/contratacao',
+        }, {'id': escritorio.id, 'tipo': 'escritorio'}, escritorio.senha_hash)
+    if not escritorio.email_confirmacao_expira or escritorio.email_confirmacao_expira <= agora_utc():
+        return jsonify({'erro': 'O código expirou. Solicite um novo código.'}), 400
+    if not escritorio.email_confirmacao_token_hash or not hmac.compare_digest(
+        escritorio.email_confirmacao_token_hash,
+        _hash_codigo_confirmacao(codigo),
+    ):
+        return jsonify({'erro': 'Código de confirmação inválido.'}), 400
+
+    escritorio.email_confirmado_em = agora_utc()
+    escritorio.email_confirmacao_token_hash = None
+    escritorio.email_confirmacao_expira = None
+    escritorio.assinatura_status = 'aguardando_pagamento'
+    db.session.commit()
+    limpar_tentativas(f'confirmar-email:{email}')
+
+    return _resposta_com_sessao({
+        'ok': True,
+        'nome': escritorio.nome,
+        'plano': escritorio.plano,
+        'plano_pretendido': escritorio.plano_pretendido,
+        'proximo': '/contratacao',
+    }, {'id': escritorio.id, 'tipo': 'escritorio'}, escritorio.senha_hash)
+
+
+@app.route('/api/comercial/reenviar-confirmacao', methods=['POST'])
+def reenviar_confirmacao_comercial():
+    data = request.get_json(silent=True) or {}
+    email = (data.get('email') or '').strip().lower()
+    permitido, espera = verificar_limite_acao(
+        f'reenviar-confirmacao:{email}', max_tentativas=3, janela_segundos=3600
+    )
+    if not permitido:
+        return jsonify({'erro': f'Aguarde {espera} segundos antes de reenviar.'}), 429
+
+    escritorio = Escritorio.query.filter_by(email=email).first()
+    resposta_padrao = {
+        'ok': True,
+        'mensagem': 'Se o cadastro estiver pendente, um novo código será enviado.',
+    }
+    if not escritorio or escritorio.email_confirmado():
+        return jsonify(resposta_padrao)
+
+    codigo = _gerar_codigo_confirmacao()
+    escritorio.email_confirmacao_token_hash = _hash_codigo_confirmacao(codigo)
+    escritorio.email_confirmacao_expira = (
+        agora_utc() + timedelta(minutes=EMAIL_CONFIRMATION_TTL_MINUTES)
+    )
+    db.session.commit()
+
+    try:
+        email_enviado = enviar_email_confirmacao_escritorio(email, codigo)
+    except (OSError, smtplib.SMTPException):
+        email_enviado = False
+        app.logger.exception('Falha ao reenviar confirmação para escritorio_id=%s.', escritorio.id)
+    resposta_padrao['email_enviado'] = email_enviado
+    if not IS_PRODUCTION:
+        resposta_padrao['codigo_dev'] = codigo
+    return jsonify(resposta_padrao)
+
 @app.route('/api/escritorio/registro', methods=['POST'])
 def registro_escritorio():
     data = request.get_json() or {}
+    if COMMERCIAL_FLOW_ENABLED:
+        return _registrar_escritorio_comercial(data)
     nome = (data.get('nome') or '').strip()
     email = (data.get('email') or '').strip().lower()
     senha = data.get('senha') or ''
@@ -1245,6 +1562,13 @@ def login_escritorio():
         registrar_tentativa_falha(email)
         return jsonify({'erro': 'Email ou senha incorretos'}), 401
 
+    if not escritorio.email_confirmado():
+        return jsonify({
+            'erro': 'Confirme seu e-mail para continuar.',
+            'confirmacao_email': True,
+            'email': escritorio.email,
+        }), 403
+
     limpar_tentativas(email)
     # upgrade silencioso de hash legado (sha256) para PBKDF2
     if len(escritorio.senha_hash) == 64 and ':' not in escritorio.senha_hash:
@@ -1269,6 +1593,10 @@ def dados_plano_escritorio():
     restante = None if limite is None else max(limite - ativos, 0)
     plano_ativo = request.escritorio.plano_ativo()
     pode_adicionar = plano_ativo and (limite is None or ativos < limite)
+    horas_teste_restantes = None
+    if codigo == 'trial' and request.escritorio.plano_expira:
+        segundos = max((request.escritorio.plano_expira - agora_utc()).total_seconds(), 0)
+        horas_teste_restantes = int((segundos + 3599) // 3600)
 
     if not plano_ativo:
         mensagem_limite = 'Seu plano está inativo. Regularize o acesso para continuar.'
@@ -1290,6 +1618,10 @@ def dados_plano_escritorio():
         'advogados_ativos': ativos,
         'advogados_restantes': restante,
         'plano_ativo': plano_ativo,
+        'assinatura_status': request.escritorio.assinatura_status,
+        'plano_pretendido': request.escritorio.plano_pretendido,
+        'trial_dias': TRIAL_DIAS,
+        'horas_teste_restantes': horas_teste_restantes,
         'pode_adicionar_advogado': pode_adicionar,
         'mensagem_limite': mensagem_limite,
         'expira_em': (
@@ -1627,6 +1959,16 @@ def processos():
         return jsonify({'erro': 'Plano inativo. Assine para continuar.', 'limite': True}), 403
 
     if request.method == 'POST':
+        codigo_plano, _ = request.escritorio.config_plano()
+        if codigo_plano == 'trial':
+            processos_existentes = Processo.query.filter_by(
+                escritorio_id=request.escritorio.id
+            ).count()
+            if processos_existentes >= 1:
+                return jsonify({
+                    'erro': 'O teste gratuito permite 1 cliente e 1 processo.',
+                    'limite_plano': True,
+                }), 403
         data = request.get_json() or {}
 
         cliente_nome = (data.get('cliente_nome') or '').strip()
@@ -2013,6 +2355,9 @@ def iniciar_contato_seguro():
     o cliente. O código nunca é informado ao cliente — ele só serve de registro
     interno consultado automaticamente pelo lado do cliente.
     """
+    if not request.escritorio.plano_ativo():
+        return jsonify({'erro': 'Plano inativo. Regularize o acesso para continuar.'}), 403
+
     data = request.get_json() or {}
     advogado_id = data.get('advogado_id')
     cliente_id = data.get('cliente_id')
@@ -3251,7 +3596,329 @@ def relatorio_processo_pdf(processo_id):
 
 
 # ──────────────────────────────────────────────
-# WEBHOOK HOTMART
+# STRIPE CHECKOUT / ASSINATURAS
+# ──────────────────────────────────────────────
+
+def _stripe_configurado():
+    return bool(STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET and STRIPE_PRICE_MAP)
+
+
+def _valor_objeto(objeto, chave, padrao=None):
+    if objeto is None:
+        return padrao
+    if isinstance(objeto, dict):
+        return objeto.get(chave, padrao)
+    return getattr(objeto, chave, padrao)
+
+
+def _data_stripe(timestamp):
+    if not timestamp:
+        return None
+    return datetime.fromtimestamp(int(timestamp), tz=timezone.utc).replace(tzinfo=None)
+
+
+def _url_publica_obrigatoria():
+    base = _base_url_publica()
+    if not base:
+        raise RuntimeError('PUBLIC_BASE_URL precisa estar configurada para o checkout.')
+    return base
+
+
+def _plano_da_assinatura(assinatura):
+    metadata = _valor_objeto(assinatura, 'metadata', {}) or {}
+    codigo = normalizar_codigo_plano(_valor_objeto(metadata, 'plano'))
+    return codigo if codigo in {'profissional', 'escritorio', 'blindagem'} else None
+
+
+def _subscription_id_da_fatura(fatura):
+    legado = _valor_objeto(fatura, 'subscription')
+    if legado:
+        return str(legado)
+    parent = _valor_objeto(fatura, 'parent', {}) or {}
+    detalhes = _valor_objeto(parent, 'subscription_details', {}) or {}
+    atual = _valor_objeto(detalhes, 'subscription')
+    return str(atual) if atual else None
+
+
+def _escritorio_da_assinatura(assinatura):
+    metadata = _valor_objeto(assinatura, 'metadata', {}) or {}
+    escritorio_id = _valor_objeto(metadata, 'escritorio_id')
+    if escritorio_id:
+        try:
+            escritorio = db.session.get(Escritorio, int(escritorio_id))
+        except (TypeError, ValueError):
+            escritorio = None
+        if escritorio:
+            return escritorio
+
+    assinatura_id = str(_valor_objeto(assinatura, 'id') or '').strip()
+    if assinatura_id:
+        escritorio = Escritorio.query.filter_by(stripe_subscription_id=assinatura_id).first()
+        if escritorio:
+            return escritorio
+
+    customer_id = str(_valor_objeto(assinatura, 'customer') or '').strip()
+    if customer_id:
+        return Escritorio.query.filter_by(stripe_customer_id=customer_id).first()
+    return None
+
+
+def _sincronizar_assinatura_stripe(assinatura):
+    escritorio = _escritorio_da_assinatura(assinatura)
+    if not escritorio:
+        raise LookupError('Escritório da assinatura Stripe não encontrado.')
+
+    assinatura_id = str(_valor_objeto(assinatura, 'id') or '').strip()
+    customer_id = str(_valor_objeto(assinatura, 'customer') or '').strip()
+    status = str(_valor_objeto(assinatura, 'status') or '').strip().lower()
+    plano = _plano_da_assinatura(assinatura) or escritorio.plano_pretendido
+
+    if plano not in {'profissional', 'escritorio', 'blindagem'}:
+        raise ValueError('Plano Stripe ausente ou inválido na assinatura.')
+    if assinatura_id:
+        escritorio.stripe_subscription_id = assinatura_id
+    if customer_id:
+        escritorio.stripe_customer_id = customer_id
+    escritorio.plano_pretendido = plano
+    escritorio.assinatura_status = status or 'incomplete'
+
+    if status == 'trialing':
+        fim_teste = _data_stripe(_valor_objeto(assinatura, 'trial_end'))
+        escritorio.plano = 'trial'
+        escritorio.plano_expira = fim_teste or (agora_utc() + timedelta(days=TRIAL_DIAS))
+        if not escritorio.trial_utilizado_em:
+            escritorio.trial_utilizado_em = agora_utc()
+    elif status == 'active':
+        escritorio.plano = plano
+        escritorio.plano_expira = None
+    elif status in {'canceled', 'incomplete_expired', 'unpaid'}:
+        escritorio.plano = 'cancelado'
+        escritorio.plano_expira = agora_utc()
+    elif status in {'past_due', 'paused', 'incomplete'}:
+        escritorio.plano = plano
+        escritorio.plano_expira = agora_utc()
+
+    db.session.commit()
+    return escritorio
+
+
+def _recuperar_assinatura_stripe(assinatura_id):
+    if not assinatura_id:
+        raise ValueError('Assinatura Stripe não informada.')
+    return stripe.Subscription.retrieve(str(assinatura_id))
+
+
+@app.route('/api/comercial/checkout', methods=['POST'])
+@login_escritorio_obrigatorio
+def criar_checkout_stripe():
+    if not STRIPE_SECRET_KEY or not STRIPE_PRICE_MAP:
+        return jsonify({'erro': 'Contratação online temporariamente indisponível.'}), 503
+    if not request.escritorio.email_confirmado():
+        return jsonify({'erro': 'Confirme seu e-mail antes da contratação.'}), 403
+
+    data = request.get_json(silent=True) or {}
+    plano = normalizar_codigo_plano(data.get('plano') or request.escritorio.plano_pretendido)
+    if plano not in {'profissional', 'escritorio', 'blindagem'}:
+        return jsonify({'erro': 'Plano indisponível para contratação online.'}), 400
+    if request.escritorio.assinatura_status in {'trialing', 'active'}:
+        return jsonify({'erro': 'Este escritório já possui uma assinatura em andamento.'}), 409
+    cnpj = _somente_digitos(request.escritorio.cnpj)
+    if len(cnpj) != 14 or _outro_escritorio_ja_usou_beneficio(cnpj, request.escritorio.id):
+        return jsonify({'erro': 'Este CNPJ já utilizou o benefício de teste.'}), 409
+    precos = STRIPE_PRICE_MAP.get(plano)
+    if not precos:
+        return jsonify({'erro': 'Preço do plano ainda não configurado.'}), 503
+
+    try:
+        base = _url_publica_obrigatoria()
+        metadata = {'escritorio_id': str(request.escritorio.id), 'plano': plano}
+        subscription_data = {'metadata': metadata}
+        if not request.escritorio.trial_utilizado_em:
+            subscription_data['trial_period_days'] = TRIAL_DIAS
+            subscription_data['trial_settings'] = {
+                'end_behavior': {'missing_payment_method': 'cancel'}
+            }
+        if not request.escritorio.taxa_implantacao_paga_em:
+            subscription_data['add_invoice_items'] = [{'price': precos['implantacao']}]
+
+        argumentos = {
+            'mode': 'subscription',
+            'line_items': [{'price': precos['mensal'], 'quantity': 1}],
+            'payment_method_collection': 'always',
+            'billing_address_collection': 'required',
+            'client_reference_id': str(request.escritorio.id),
+            'metadata': metadata,
+            'subscription_data': subscription_data,
+            'success_url': base + '/contratacao/sucesso?session_id={CHECKOUT_SESSION_ID}',
+            'cancel_url': base + '/contratacao?cancelado=1',
+        }
+        if request.escritorio.stripe_customer_id:
+            argumentos['customer'] = request.escritorio.stripe_customer_id
+        else:
+            argumentos['customer_email'] = request.escritorio.email
+
+        sessao = stripe.checkout.Session.create(**argumentos)
+    except (stripe.StripeError, RuntimeError, ValueError):
+        app.logger.exception('Falha ao criar checkout para escritorio_id=%s.', request.escritorio.id)
+        return jsonify({'erro': 'Não foi possível abrir o pagamento. Tente novamente.'}), 502
+
+    request.escritorio.plano_pretendido = plano
+    request.escritorio.assinatura_status = 'aguardando_checkout'
+    request.escritorio.stripe_checkout_session_id = str(_valor_objeto(sessao, 'id') or '')
+    db.session.commit()
+    return jsonify({'ok': True, 'checkout_url': _valor_objeto(sessao, 'url')})
+
+
+@app.route('/api/comercial/checkout/sincronizar', methods=['POST'])
+@login_escritorio_obrigatorio
+def sincronizar_checkout_stripe():
+    if not STRIPE_SECRET_KEY:
+        return jsonify({'erro': 'Integração de pagamento indisponível.'}), 503
+    data = request.get_json(silent=True) or {}
+    session_id = str(data.get('session_id') or '').strip()
+    if not session_id or session_id != request.escritorio.stripe_checkout_session_id:
+        return jsonify({'erro': 'Sessão de pagamento inválida.'}), 400
+
+    try:
+        sessao = stripe.checkout.Session.retrieve(session_id)
+        referencia = str(_valor_objeto(sessao, 'client_reference_id') or '')
+        if referencia != str(request.escritorio.id):
+            return jsonify({'erro': 'Sessão de pagamento não pertence a este escritório.'}), 403
+        assinatura_id = _valor_objeto(sessao, 'subscription')
+        assinatura = _recuperar_assinatura_stripe(assinatura_id)
+        escritorio = _sincronizar_assinatura_stripe(assinatura)
+        if _valor_objeto(sessao, 'payment_status') == 'paid' and not escritorio.taxa_implantacao_paga_em:
+            escritorio.taxa_implantacao_paga_em = agora_utc()
+            db.session.commit()
+    except (stripe.StripeError, LookupError, ValueError):
+        app.logger.exception('Falha ao sincronizar checkout session_id=%s.', session_id)
+        return jsonify({'erro': 'Pagamento recebido; a ativação ainda está sendo processada.'}), 202
+
+    return jsonify({
+        'ok': True,
+        'assinatura_status': escritorio.assinatura_status,
+        'plano': escritorio.plano,
+        'proximo': '/escritorio/painel',
+    })
+
+
+@app.route('/api/comercial/status', methods=['GET'])
+@login_escritorio_obrigatorio
+def status_comercial():
+    escritorio = request.escritorio
+    return jsonify({
+        'email_confirmado': escritorio.email_confirmado(),
+        'plano': normalizar_codigo_plano(escritorio.plano),
+        'plano_pretendido': escritorio.plano_pretendido,
+        'assinatura_status': escritorio.assinatura_status,
+        'trial_dias': TRIAL_DIAS,
+        'trial_utilizado': bool(escritorio.trial_utilizado_em),
+        'taxa_implantacao_paga': bool(escritorio.taxa_implantacao_paga_em),
+        'assinatura_gerenciavel': bool(escritorio.stripe_customer_id),
+        'plano_ativo': escritorio.plano_ativo(),
+    })
+
+
+@app.route('/api/comercial/portal', methods=['POST'])
+@login_escritorio_obrigatorio
+def criar_portal_stripe():
+    if not STRIPE_SECRET_KEY or not request.escritorio.stripe_customer_id:
+        return jsonify({'erro': 'Gerenciamento da assinatura indisponível.'}), 503
+    try:
+        sessao = stripe.billing_portal.Session.create(
+            customer=request.escritorio.stripe_customer_id,
+            return_url=_url_publica_obrigatoria() + '/escritorio/configuracoes',
+        )
+    except (stripe.StripeError, RuntimeError):
+        app.logger.exception('Falha ao abrir portal para escritorio_id=%s.', request.escritorio.id)
+        return jsonify({'erro': 'Não foi possível abrir o gerenciamento da assinatura.'}), 502
+    return jsonify({'ok': True, 'portal_url': _valor_objeto(sessao, 'url')})
+
+
+@app.route('/webhook/stripe', methods=['POST'])
+def webhook_stripe():
+    if not STRIPE_WEBHOOK_SECRET or not STRIPE_SECRET_KEY:
+        app.logger.error('Webhook Stripe bloqueado: integração não configurada.')
+        return jsonify({'erro': 'Webhook indisponível.'}), 503
+
+    assinatura_header = request.headers.get('Stripe-Signature', '')
+    try:
+        evento = stripe.Webhook.construct_event(
+            request.get_data(cache=False), assinatura_header, STRIPE_WEBHOOK_SECRET
+        )
+    except (ValueError, stripe.SignatureVerificationError):
+        return jsonify({'erro': 'Assinatura do webhook inválida.'}), 400
+
+    event_id = str(_valor_objeto(evento, 'id') or '').strip()
+    tipo = str(_valor_objeto(evento, 'type') or '').strip()
+    dados_evento = _valor_objeto(_valor_objeto(evento, 'data', {}), 'object', {}) or {}
+    if not event_id:
+        return jsonify({'erro': 'Evento sem identificador.'}), 400
+    if EventoWebhook.query.filter_by(provedor='stripe', event_id=event_id).first():
+        return jsonify({'ok': True, 'duplicado': True})
+
+    resultado = 'ignorado'
+    escritorio = None
+    try:
+        if tipo == 'checkout.session.completed':
+            referencia = _valor_objeto(dados_evento, 'client_reference_id')
+            escritorio = db.session.get(Escritorio, int(referencia)) if referencia else None
+            if not escritorio:
+                raise LookupError('Escritório do checkout não encontrado.')
+            escritorio.stripe_checkout_session_id = str(_valor_objeto(dados_evento, 'id') or '')
+            escritorio.stripe_customer_id = str(_valor_objeto(dados_evento, 'customer') or '')
+            assinatura = _recuperar_assinatura_stripe(_valor_objeto(dados_evento, 'subscription'))
+            escritorio = _sincronizar_assinatura_stripe(assinatura)
+            if _valor_objeto(dados_evento, 'payment_status') == 'paid' and not escritorio.taxa_implantacao_paga_em:
+                escritorio.taxa_implantacao_paga_em = agora_utc()
+            resultado = 'checkout_sincronizado'
+        elif tipo in {
+            'customer.subscription.created',
+            'customer.subscription.updated',
+            'customer.subscription.deleted',
+        }:
+            escritorio = _sincronizar_assinatura_stripe(dados_evento)
+            resultado = f'assinatura_{escritorio.assinatura_status}'
+        elif tipo in {'invoice.paid', 'invoice.payment_failed'}:
+            assinatura_id = _subscription_id_da_fatura(dados_evento)
+            if assinatura_id:
+                escritorio = Escritorio.query.filter_by(
+                    stripe_subscription_id=str(assinatura_id)
+                ).first()
+            if tipo == 'invoice.paid' and assinatura_id:
+                escritorio = _sincronizar_assinatura_stripe(
+                    _recuperar_assinatura_stripe(assinatura_id)
+                )
+                resultado = 'fatura_paga'
+            elif tipo == 'invoice.payment_failed' and escritorio:
+                escritorio.assinatura_status = 'past_due'
+                escritorio.plano_expira = agora_utc()
+                resultado = 'pagamento_pendente'
+
+        plano = escritorio.plano_pretendido if escritorio else None
+        produto_id = (
+            escritorio.stripe_subscription_id if escritorio else
+            str(_valor_objeto(dados_evento, 'id') or '')
+        )
+        db.session.add(EventoWebhook(
+            provedor='stripe',
+            event_id=event_id,
+            evento=tipo,
+            produto_id=produto_id,
+            plano=plano,
+            resultado=resultado,
+        ))
+        db.session.commit()
+    except (SQLAlchemyError, stripe.StripeError, LookupError, ValueError, TypeError):
+        db.session.rollback()
+        app.logger.exception('Falha ao processar webhook Stripe event_id=%s tipo=%s.', event_id, tipo)
+        return jsonify({'erro': 'Evento não processado.'}), 500
+
+    return jsonify({'ok': True, 'resultado': resultado})
+
+
+# ──────────────────────────────────────────────
+# WEBHOOK HOTMART (legado preservado)
 # ──────────────────────────────────────────────
 
 @app.route('/webhook/hotmart', methods=['POST'])
@@ -3463,7 +4130,33 @@ def admin_listar():
 
 @app.route('/')
 def home():
-    return render_template('index.html')
+    return render_template(
+        'index.html',
+        public_base_url=(_base_url_publica() or request.host_url.rstrip('/')),
+    )
+
+
+@app.route('/robots.txt')
+def robots_txt():
+    base = _base_url_publica() or request.host_url.rstrip('/')
+    return Response(
+        f'User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /escritorio/\nDisallow: /cliente/\n'
+        f'Sitemap: {base}/sitemap.xml\n',
+        mimetype='text/plain',
+    )
+
+
+@app.route('/sitemap.xml')
+def sitemap_xml():
+    base = _base_url_publica() or request.host_url.rstrip('/')
+    urls = ('/', '/planos', '/verificar', '/privacidade', '/escritorio/login')
+    corpo = ''.join(f'<url><loc>{base}{caminho}</loc></url>' for caminho in urls)
+    return Response(
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        f'{corpo}</urlset>',
+        mimetype='application/xml',
+    )
 
 
 @app.route('/verificar')
@@ -3497,7 +4190,7 @@ def _catalogo_comercial_publico():
 @app.route('/api/publico/planos', methods=['GET'])
 def api_planos_publicos():
     return jsonify({
-        'trial_dias': 0,
+        'trial_dias': TRIAL_DIAS,
         'trial_limite_advogados': PLANOS_ADVOGO_SEGURO['trial']['limite_advogados'],
         'planos': _catalogo_comercial_publico(),
     })
@@ -3508,7 +4201,7 @@ def pagina_planos():
     return render_template(
         'planos.html',
         planos=_catalogo_comercial_publico(),
-        trial_dias=0,
+        trial_dias=TRIAL_DIAS,
         commercial_whatsapp=COMMERCIAL_WHATSAPP,
         commercial_email=COMMERCIAL_EMAIL,
     )
@@ -3527,6 +4220,21 @@ def pagina_escritorio_login():
 @app.route('/escritorio/cadastro')
 def pagina_escritorio_cadastro():
     return render_template('escritorio_cadastro.html')
+
+
+@app.route('/confirmar-email')
+def pagina_confirmar_email():
+    return render_template('confirmar_email.html')
+
+
+@app.route('/contratacao')
+def pagina_contratacao():
+    return render_template('contratacao.html')
+
+
+@app.route('/contratacao/sucesso')
+def pagina_contratacao_sucesso():
+    return render_template('contratacao_sucesso.html')
 
 
 @app.route('/escritorio/painel')

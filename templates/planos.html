@@ -30,7 +30,7 @@
     <div>⚖️ ADVOGO SEGURO</div>
     <h1>Planos claros, limites claros</h1>
     <p>Os planos abaixo usam a mesma tabela de preços e limites aplicada pelo sistema. A diferença principal de capacidade é a quantidade de advogados ativos.</p>
-    <div class="trial">Teste por {{ trial_dias }} dias com 1 advogado ativo antes da contratação.</div>
+    <div class="trial">Teste gratuito por {{ trial_dias }} dias. Após esse período, será cobrada automaticamente a mensalidade do plano escolhido.</div>
   </div>
 </header>
 
@@ -74,7 +74,9 @@
           <li>Histórico de segurança e verificações</li>
         </ul>
 
-        {% if commercial_whatsapp %}
+        {% if plano.codigo != 'corporativo' %}
+          <a class="btn" href="/escritorio/cadastro?plano={{ plano.codigo }}">Começar teste por {{ trial_dias }} dias</a>
+        {% elif commercial_whatsapp %}
           <a class="btn" target="_blank" rel="noopener"
              href="https://wa.me/{{ commercial_whatsapp }}?text={{ ('Olá, quero contratar o plano ' ~ plano.nome ~ ' do ADVOGO SEGURO.')|urlencode }}">
              Solicitar contratação
@@ -82,14 +84,14 @@
         {% elif commercial_email %}
           <a class="btn" href="mailto:{{ commercial_email }}?subject={{ ('ADVOGO SEGURO - ' ~ plano.nome)|urlencode }}">Solicitar contratação</a>
         {% else %}
-          <a class="btn" href="/escritorio/cadastro">Começar teste de {{ trial_dias }} dias</a>
+          <a class="btn" href="/vendas">Solicitar contratação</a>
         {% endif %}
       </article>
       {% endfor %}
     </div>
 
     <div class="note">
-      <strong>Importante:</strong> mensalidade e implantação são itens distintos.
+      <strong>Importante:</strong> a implantação é cobrada no início. O teste gratuito dura {{ trial_dias }} dias e a mensalidade do plano escolhido é cobrada automaticamente após o teste.
       Serviços adicionais ou integrações personalizadas somente devem constar na proposta quando forem efetivamente contratados.
     </div>
   </div>

@@ -166,6 +166,11 @@ document.getElementById('formLogin').addEventListener('submit', async (e) => {
     Auth.setSession(data.token, 'escritorio', data.nome, data.plano);
     window.location.href = '/escritorio/painel';
   } catch (err) {
+    if (err.payload && err.payload.confirmacao_email) {
+      sessionStorage.setItem('advogo_seguro_email_confirmacao', err.payload.email || document.getElementById('email').value.trim());
+      window.location.href = '/confirmar-email';
+      return;
+    }
     showAlert('alertaLogin', err.message, 'erro');
   } finally {
     setLoading(btn, false, 'Entrar');

@@ -12,7 +12,7 @@ services:
       - key: PYTHONUNBUFFERED
         value: 1
       - key: APP_VERSION
-        value: 1.0.0
+        value: 1.1.0
       - key: SECRET_KEY
         generateValue: true
       - key: JWT_SECRET
@@ -26,6 +26,18 @@ services:
       - key: COMMERCIAL_WHATSAPP
         sync: false
       - key: COMMERCIAL_EMAIL
+        sync: false
+      - key: COMMERCIAL_FLOW_ENABLED
+        value: 1
+      - key: TRIAL_DIAS
+        value: 2
+      - key: EMAIL_CONFIRMATION_TTL_MINUTES
+        value: 15
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_PRICE_MAP
         sync: false
       - key: ALLOWED_ORIGINS
         sync: false

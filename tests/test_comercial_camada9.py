@@ -43,7 +43,7 @@ def test_pagina_e_api_planos_usam_fonte_unica_sem_placeholder(client):
     api = client.get('/api/publico/planos')
     assert api.status_code == 200
     dados = api.get_json()
-    assert dados['trial_dias'] == 0
+    assert dados['trial_dias'] == 2
     assert dados['trial_limite_advogados'] == 1
     assert [p['preco_mensal'] for p in dados['planos']] == [179.0, 497.0, 997.0, 1597.0]
 
@@ -55,6 +55,7 @@ def test_pagina_e_api_planos_usam_fonte_unica_sem_placeholder(client):
     assert 'Substitua este texto' not in texto
     assert 'Controle de usuários e permissões' not in texto
     assert 'MAIS CONTRATADO' not in texto
+    assert 'Teste gratuito por 2 dias' in texto
 
 
 def test_home_sidebar_e_url_antiga_apontam_para_planos(client):
