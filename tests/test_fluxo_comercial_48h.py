@@ -86,8 +86,11 @@ def test_checkout_cobra_implantacao_e_configura_teste_de_dois_dias(client, monke
     assert capturado['mode'] == 'subscription'
     assert capturado['payment_method_collection'] == 'always'
     assert capturado['subscription_data']['trial_period_days'] == 2
-    assert capturado['subscription_data']['add_invoice_items'] == [{'price': 'price_implantacao'}]
-    assert capturado['line_items'] == [{'price': 'price_mensal', 'quantity': 1}]
+    assert capturado['line_items'] == [
+        {'price': 'price_mensal', 'quantity': 1},
+        {'price': 'price_implantacao', 'quantity': 1},
+    ]
+    assert 'add_invoice_items' not in capturado['subscription_data']
 
 
 def test_sincronizacao_libera_trial_por_48_horas_e_nao_plano_pago(client, monkeypatch):

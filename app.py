@@ -3738,12 +3738,13 @@ def criar_checkout_stripe():
             subscription_data['trial_settings'] = {
                 'end_behavior': {'missing_payment_method': 'cancel'}
             }
+        line_items = [{'price': precos['mensal'], 'quantity': 1}]
         if not request.escritorio.taxa_implantacao_paga_em:
-            subscription_data['add_invoice_items'] = [{'price': precos['implantacao']}]
+            line_items.append({'price': precos['implantacao'], 'quantity': 1})
 
         argumentos = {
             'mode': 'subscription',
-            'line_items': [{'price': precos['mensal'], 'quantity': 1}],
+            'line_items': line_items,
             'payment_method_collection': 'always',
             'billing_address_collection': 'required',
             'client_reference_id': str(request.escritorio.id),
