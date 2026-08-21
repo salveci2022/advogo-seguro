@@ -17,3 +17,7 @@ backups
 
 app.py.backup_*
 *.log
+.dev.vars*
+node_modules
+.wrangler
+dist

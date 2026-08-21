@@ -36,3 +36,7 @@ templates/*.backup*
 screencapture-*.png
 templates/screencapture-*.png
 ADVOGO_SEGURO_CAMADA*_APLICAR/
+.dev.vars*
+.wrangler/
+dist/
+node_modules/
