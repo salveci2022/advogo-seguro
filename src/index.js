@@ -24,7 +24,7 @@ export default {
   async fetch(request, workerEnv) {
     const container = getContainer(
       workerEnv.ADVOGO_CONTAINER,
-      "advogo-seguro-staging-v4"
+      "advogo-seguro-staging-v5"
     );
 
     return container.fetch(request);
