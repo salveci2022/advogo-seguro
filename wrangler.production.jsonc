@@ -1,0 +1,33 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "advogo-seguro",
+  "main": "src/index.production.js",
+  "compatibility_date": "2026-08-21",
+
+  "containers": [
+    {
+      "class_name": "AdvogoSeguroContainer",
+      "image": "./Dockerfile",
+      "max_instances": 1,
+      "instance_type": "lite"
+    }
+  ],
+
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "ADVOGO_CONTAINER",
+        "class_name": "AdvogoSeguroContainer"
+      }
+    ]
+  },
+
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "AdvogoSeguroContainer"
+      ]
+    }
+  ]
+}
