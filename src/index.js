@@ -15,6 +15,12 @@ export class AdvogoSeguroContainer extends Container {
     STRIPE_SECRET_KEY: env.STRIPE_SECRET_KEY,
     STRIPE_WEBHOOK_SECRET: env.STRIPE_WEBHOOK_SECRET,
     STRIPE_PRICE_MAP: env.STRIPE_PRICE_MAP,
+    SMTP_HOST: env.SMTP_HOST,
+    SMTP_PORT: env.SMTP_PORT,
+    SMTP_USER: env.SMTP_USER,
+    SMTP_PASSWORD: env.SMTP_PASSWORD,
+    SMTP_FROM: env.SMTP_FROM,
+    SMTP_SECURITY: env.SMTP_SECURITY,
     PUBLIC_BASE_URL: "https://advogo-seguro-staging.salvecidossantos454.workers.dev",
     COMMERCIAL_FLOW_ENABLED: "false"
   };
