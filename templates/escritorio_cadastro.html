@@ -137,7 +137,10 @@ document.getElementById('formCadastro').addEventListener('submit', async (event)
       method: 'POST', auth: false,
       body: {
         nome: document.getElementById('nome').value.trim(),
-        cnpj: document.getElementById('cnpj').value.trim(),
+        tipo_pessoa: tipoPessoa.value,
+        cpf: tipoPessoa.value === 'pf' ? campoCpf.value.trim() : '',
+        oab: tipoPessoa.value === 'pf' ? campoOab.value.trim() : '',
+        cnpj: tipoPessoa.value === 'pj' ? campoCnpj.value.trim() : '',
         email: document.getElementById('email').value.trim(),
         senha: document.getElementById('senha').value,
         plano: document.getElementById('plano').value
