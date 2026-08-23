@@ -446,6 +446,9 @@ class Escritorio(db.Model):
     )
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(200), nullable=False)
+    tipo_pessoa = db.Column(db.String(2), default='pj', nullable=False)  # pf | pj
+    cpf = db.Column(db.String(14))
+    oab = db.Column(db.String(30))
     cnpj = db.Column(db.String(20))
     email = db.Column(db.String(200), unique=True, nullable=False)
     senha_hash = db.Column(db.String(200), nullable=False)
@@ -718,6 +721,9 @@ def _garantir_colunas_novas():
         ('advogados', 'foto_mime', 'VARCHAR(50)'),
         ('advogados', 'foto_token', 'VARCHAR(64)'),
         ('clientes', 'ativo', 'BOOLEAN NOT NULL DEFAULT TRUE'),
+        ('escritorios', 'tipo_pessoa', "VARCHAR(2) NOT NULL DEFAULT 'pj'"),
+        ('escritorios', 'cpf', 'VARCHAR(14)'),
+        ('escritorios', 'oab', 'VARCHAR(30)'),
         ('escritorios', 'email_confirmacao_obrigatoria', 'BOOLEAN NOT NULL DEFAULT FALSE'),
         ('escritorios', 'email_confirmado_em', 'TIMESTAMP'),
         ('escritorios', 'email_confirmacao_token_hash', 'VARCHAR(64)'),
@@ -1341,10 +1347,37 @@ def _cnpj_ja_cadastrado(cnpj_normalizado):
     return False
 
 
-def _outro_escritorio_ja_usou_beneficio(cnpj_normalizado, escritorio_id):
+def _cpf_ja_cadastrado(cpf_normalizado):
+    if not cpf_normalizado:
+        return False
+
+    for escritorio in Escritorio.query.filter(Escritorio.cpf.isnot(None)).all():
+        if _somente_digitos(escritorio.cpf) == cpf_normalizado:
+            if (
+                not escritorio.email_confirmacao_obrigatoria
+                or escritorio.email_confirmado_em
+                or escritorio.trial_utilizado_em
+                or normalizar_codigo_plano(escritorio.plano) != 'trial'
+            ):
+                return True
+    return False
+
+
+def _outro_escritorio_ja_usou_beneficio_documento(
+    tipo_pessoa, documento_normalizado, escritorio_id
+):
+    if not documento_normalizado:
+        return False
+
+    campo_documento = 'cpf' if tipo_pessoa == 'pf' else 'cnpj'
+
     for escritorio in Escritorio.query.filter(Escritorio.id != escritorio_id).all():
-        if _somente_digitos(escritorio.cnpj) != cnpj_normalizado:
+        documento_escritorio = _somente_digitos(
+            getattr(escritorio, campo_documento, None)
+        )
+        if documento_escritorio != documento_normalizado:
             continue
+
         if (
             escritorio.trial_utilizado_em
             or escritorio.assinatura_status in {'trialing', 'active'}
@@ -1354,13 +1387,24 @@ def _outro_escritorio_ja_usou_beneficio(cnpj_normalizado, escritorio_id):
             )
         ):
             return True
+
     return False
+
+
+def _outro_escritorio_ja_usou_beneficio(cnpj_normalizado, escritorio_id):
+    # Compatibilidade com chamadas existentes baseadas em CNPJ.
+    return _outro_escritorio_ja_usou_beneficio_documento(
+        'pj', cnpj_normalizado, escritorio_id
+    )
 
 
 def _registrar_escritorio_comercial(data):
     nome = (data.get('nome') or '').strip()
     email = (data.get('email') or '').strip().lower()
     senha = data.get('senha') or ''
+    tipo_pessoa = str(data.get('tipo_pessoa') or 'pj').strip().lower()
+    cpf = _somente_digitos(data.get('cpf'))
+    oab = (data.get('oab') or '').strip().upper()
     cnpj = _somente_digitos(data.get('cnpj'))
     plano = normalizar_codigo_plano(data.get('plano'))
 
@@ -1376,19 +1420,38 @@ def _registrar_escritorio_comercial(data):
         return jsonify({
             'erro': f'Preencha nome, e-mail e senha (mín. {SENHA_MIN_CARACTERES} caracteres).'
         }), 400
-    if len(cnpj) != 14:
-        return jsonify({'erro': 'Informe um CNPJ válido com 14 dígitos.'}), 400
+    if tipo_pessoa not in {'pf', 'pj'}:
+        return jsonify({'erro': 'Selecione advogado individual ou escritório.'}), 400
+
+    if tipo_pessoa == 'pf':
+        if len(cpf) != 11:
+            return jsonify({'erro': 'Informe um CPF com 11 dígitos.'}), 400
+        if not oab or len(oab) > 30:
+            return jsonify({'erro': 'Informe a OAB do advogado.'}), 400
+        cnpj = None
+    else:
+        if len(cnpj) != 14:
+            return jsonify({'erro': 'Informe um CNPJ com 14 dígitos.'}), 400
+        cpf = None
+        oab = None
+
     if plano not in {'profissional', 'escritorio', 'blindagem'}:
         return jsonify({'erro': 'Escolha um plano disponível para contratação online.'}), 400
     if Escritorio.query.filter_by(email=email).first():
         return jsonify({'erro': 'E-mail já cadastrado.'}), 409
-    if _cnpj_ja_cadastrado(cnpj):
+    if tipo_pessoa == 'pf':
+        if _cpf_ja_cadastrado(cpf):
+            return jsonify({'erro': 'Este CPF já possui cadastro no ADVOGO SEGURO.'}), 409
+    elif _cnpj_ja_cadastrado(cnpj):
         return jsonify({'erro': 'Este CNPJ já possui cadastro no ADVOGO SEGURO.'}), 409
 
     codigo = _gerar_codigo_confirmacao()
     escritorio = Escritorio(
         nome=nome,
         email=email,
+        tipo_pessoa=tipo_pessoa,
+        cpf=cpf,
+        oab=oab,
         cnpj=cnpj,
         senha_hash=hash_senha(senha),
         plano='trial',
@@ -3722,9 +3785,25 @@ def criar_checkout_stripe():
         return jsonify({'erro': 'Plano indisponível para contratação online.'}), 400
     if request.escritorio.assinatura_status in {'trialing', 'active'}:
         return jsonify({'erro': 'Este escritório já possui uma assinatura em andamento.'}), 409
-    cnpj = _somente_digitos(request.escritorio.cnpj)
-    if len(cnpj) != 14 or _outro_escritorio_ja_usou_beneficio(cnpj, request.escritorio.id):
-        return jsonify({'erro': 'Este CNPJ já utilizou o benefício de teste.'}), 409
+    tipo_pessoa = (request.escritorio.tipo_pessoa or 'pj').strip().lower()
+
+    if tipo_pessoa == 'pf':
+        cpf = _somente_digitos(request.escritorio.cpf)
+        if len(cpf) != 11:
+            return jsonify({'erro': 'CPF do titular inválido para contratação.'}), 400
+        if _outro_escritorio_ja_usou_beneficio_documento(
+            'pf', cpf, request.escritorio.id
+        ):
+            return jsonify({'erro': 'Este CPF já utilizou o benefício de teste.'}), 409
+    else:
+        cnpj = _somente_digitos(request.escritorio.cnpj)
+        if len(cnpj) != 14:
+            return jsonify({'erro': 'CNPJ inválido para contratação.'}), 400
+        if _outro_escritorio_ja_usou_beneficio_documento(
+            'pj', cnpj, request.escritorio.id
+        ):
+            return jsonify({'erro': 'Este CNPJ já utilizou o benefício de teste.'}), 409
+
     precos = STRIPE_PRICE_MAP.get(plano)
     if not precos:
         return jsonify({'erro': 'Preço do plano ainda não configurado.'}), 503

@@ -220,3 +220,146 @@ def test_webhook_pagamento_recusado_bloqueia_sem_apagar_dados(client, monkeypatc
         assert escritorio.assinatura_status == 'past_due'
         assert escritorio.plano_ativo() is False
         assert escritorio.email == registro['email']
+
+
+def test_registro_advogado_individual_aceita_cpf_oab_sem_cnpj(client):
+    resposta = client.post('/api/comercial/registro', json={
+        'nome': 'João Advogado',
+        'tipo_pessoa': 'pf',
+        'cpf': '123.456.789-01',
+        'oab': 'DF 12345',
+        'email': 'advogado.individual@example.com',
+        'senha': 'SenhaComercial123!',
+        'plano': 'profissional',
+    })
+
+    assert resposta.status_code == 201, resposta.get_json()
+
+    with appmodule.app.app_context():
+        escritorio = appmodule.Escritorio.query.filter_by(
+            email='advogado.individual@example.com'
+        ).first()
+
+        assert escritorio is not None
+        assert escritorio.tipo_pessoa == 'pf'
+        assert escritorio.cpf == '12345678901'
+        assert escritorio.oab == 'DF 12345'
+        assert escritorio.cnpj is None
+
+
+def test_registro_advogado_individual_exige_cpf(client):
+    resposta = client.post('/api/comercial/registro', json={
+        'nome': 'Advogado Sem CPF',
+        'tipo_pessoa': 'pf',
+        'oab': 'DF 12345',
+        'email': 'sem.cpf@example.com',
+        'senha': 'SenhaComercial123!',
+        'plano': 'profissional',
+    })
+
+    assert resposta.status_code == 400
+    assert 'CPF' in resposta.get_json()['erro']
+
+
+def test_registro_advogado_individual_exige_oab(client):
+    resposta = client.post('/api/comercial/registro', json={
+        'nome': 'Advogado Sem OAB',
+        'tipo_pessoa': 'pf',
+        'cpf': '98765432100',
+        'email': 'sem.oab@example.com',
+        'senha': 'SenhaComercial123!',
+        'plano': 'profissional',
+    })
+
+    assert resposta.status_code == 400
+    assert 'OAB' in resposta.get_json()['erro']
+
+
+def test_um_cpf_nao_cria_duas_contas_de_teste(client):
+    primeiro = client.post('/api/comercial/registro', json={
+        'nome': 'Primeiro Advogado',
+        'tipo_pessoa': 'pf',
+        'cpf': '111.222.333-44',
+        'oab': 'DF 11111',
+        'email': 'primeiro.advogado@example.com',
+        'senha': 'SenhaComercial123!',
+        'plano': 'profissional',
+    })
+
+    assert primeiro.status_code == 201, primeiro.get_json()
+    _confirmar(client, primeiro.get_json())
+
+    repetido = client.post('/api/comercial/registro', json={
+        'nome': 'Segundo Advogado',
+        'tipo_pessoa': 'pf',
+        'cpf': '11122233344',
+        'oab': 'DF 22222',
+        'email': 'segundo.advogado@example.com',
+        'senha': 'SenhaComercial123!',
+        'plano': 'profissional',
+    })
+
+    assert repetido.status_code == 409
+    assert 'CPF' in repetido.get_json()['erro']
+
+
+def test_registro_pj_continua_exigindo_cnpj(client):
+    resposta = client.post('/api/comercial/registro', json={
+        'nome': 'Escritório Sem CNPJ',
+        'tipo_pessoa': 'pj',
+        'email': 'pj.sem.cnpj@example.com',
+        'senha': 'SenhaComercial123!',
+        'plano': 'escritorio',
+    })
+
+    assert resposta.status_code == 400
+    assert 'CNPJ' in resposta.get_json()['erro']
+
+
+def test_checkout_advogado_individual_funciona_sem_cnpj(client, monkeypatch):
+    registro = client.post('/api/comercial/registro', json={
+        'nome': 'Advogado Checkout',
+        'tipo_pessoa': 'pf',
+        'cpf': '555.666.777-88',
+        'oab': 'DF 55555',
+        'email': 'advogado.checkout@example.com',
+        'senha': 'SenhaComercial123!',
+        'plano': 'profissional',
+    })
+
+    assert registro.status_code == 201, registro.get_json()
+
+    confirmacao = _confirmar(client, registro.get_json())
+    headers = {
+        'Authorization': f"Bearer {confirmacao['token']}"
+    }
+
+    monkeypatch.setattr(appmodule, 'STRIPE_SECRET_KEY', 'sk_test_segura')
+    monkeypatch.setattr(appmodule, 'STRIPE_PRICE_MAP', {
+        'profissional': {
+            'mensal': 'price_profissional_mensal',
+            'implantacao': 'price_profissional_implantacao',
+        }
+    })
+    monkeypatch.setattr(
+        appmodule,
+        'PUBLIC_BASE_URL',
+        'https://advogo-seguro.example'
+    )
+    monkeypatch.setattr(
+        appmodule.stripe.checkout.Session,
+        'create',
+        lambda **kwargs: SimpleNamespace(
+            id='cs_test_pf',
+            url='https://checkout.stripe.test/pf'
+        )
+    )
+
+    resposta = client.post(
+        '/api/comercial/checkout',
+        json={'plano': 'profissional'},
+        headers=headers
+    )
+
+    assert resposta.status_code == 200, resposta.get_json()
+    assert resposta.get_json()['checkout_url'] == 'https://checkout.stripe.test/pf'

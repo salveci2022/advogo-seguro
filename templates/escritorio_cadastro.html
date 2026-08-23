@@ -41,12 +41,31 @@
           </select>
         </div>
         <div class="form-group">
-          <label for="nome">Nome do escritório</label>
-          <input type="text" class="form-control" id="nome" required maxlength="200" placeholder="Ex.: Silva &amp; Associados Advocacia">
+          <label for="tipo_pessoa">Tipo de cadastro</label>
+          <select class="form-control" id="tipo_pessoa" required>
+            <option value="pf">Advogado individual — CPF + OAB</option>
+            <option value="pj">Escritório / Sociedade — CNPJ</option>
+          </select>
         </div>
+
         <div class="form-group">
+          <label for="nome" id="labelNome">Nome completo</label>
+          <input type="text" class="form-control" id="nome" required maxlength="200" placeholder="Ex.: João da Silva">
+        </div>
+
+        <div class="form-group" id="grupoCpf">
+          <label for="cpf">CPF</label>
+          <input type="text" class="form-control" id="cpf" required inputmode="numeric" maxlength="14" placeholder="000.000.000-00">
+        </div>
+
+        <div class="form-group" id="grupoOab">
+          <label for="oab">OAB</label>
+          <input type="text" class="form-control" id="oab" required maxlength="30" placeholder="Ex.: DF 12345">
+        </div>
+
+        <div class="form-group" id="grupoCnpj" hidden>
           <label for="cnpj">CNPJ</label>
-          <input type="text" class="form-control" id="cnpj" required inputmode="numeric" maxlength="18" placeholder="00.000.000/0000-00">
+          <input type="text" class="form-control" id="cnpj" inputmode="numeric" maxlength="18" placeholder="00.000.000/0000-00">
         </div>
         <div class="form-group">
           <label for="email">E-mail</label>
@@ -77,6 +96,36 @@ const planoUrl = new URLSearchParams(window.location.search).get('plano');
 if (['profissional', 'escritorio', 'blindagem'].includes(planoUrl)) {
   document.getElementById('plano').value = planoUrl;
 }
+
+const tipoPessoa = document.getElementById('tipo_pessoa');
+const campoCpf = document.getElementById('cpf');
+const campoOab = document.getElementById('oab');
+const campoCnpj = document.getElementById('cnpj');
+const grupoCpf = document.getElementById('grupoCpf');
+const grupoOab = document.getElementById('grupoOab');
+const grupoCnpj = document.getElementById('grupoCnpj');
+const campoNome = document.getElementById('nome');
+const labelNome = document.getElementById('labelNome');
+
+function atualizarTipoPessoa() {
+  const pessoaFisica = tipoPessoa.value === 'pf';
+
+  grupoCpf.hidden = !pessoaFisica;
+  grupoOab.hidden = !pessoaFisica;
+  grupoCnpj.hidden = pessoaFisica;
+
+  campoCpf.required = pessoaFisica;
+  campoOab.required = pessoaFisica;
+  campoCnpj.required = !pessoaFisica;
+
+  labelNome.textContent = pessoaFisica ? 'Nome completo' : 'Nome do escritório';
+  campoNome.placeholder = pessoaFisica
+    ? 'Ex.: João da Silva'
+    : 'Ex.: Silva & Associados Advocacia';
+}
+
+tipoPessoa.addEventListener('change', atualizarTipoPessoa);
+atualizarTipoPessoa();
 
 document.getElementById('formCadastro').addEventListener('submit', async (event) => {
   event.preventDefault();
