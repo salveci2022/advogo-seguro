@@ -4,11 +4,15 @@
   "main": "src/index.production.js",
   "compatibility_date": "2026-08-21",
 
+  "observability": {
+    "enabled": true
+  },
+
   "containers": [
     {
       "class_name": "AdvogoSeguroContainer",
       "image": "./Dockerfile",
-      "max_instances": 1,
+      "max_instances": 2,
       "instance_type": "lite"
     }
   ],
