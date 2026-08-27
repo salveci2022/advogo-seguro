@@ -56,19 +56,25 @@
   text-align: left;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 899px) {
+  .auth-wrap {
+    background: var(--cinza-claro);
+  }
+
   .auth-side {
-    min-height: 460px;
-    padding: 42px 24px !important;
+    display: none !important;
   }
 
-  .auth-side .login-main-brand {
-    font-size: clamp(2rem, 8vw, 3rem);
+  .auth-form-col {
+    flex: 0 0 100%;
+    width: 100%;
+    min-height: 100vh;
+    padding: 24px 16px;
   }
 
-  .auth-side .login-main-brand img {
-    width: 74px;
-    height: 74px;
+  .auth-card {
+    width: 100%;
+    max-width: 420px;
   }
 }
 </style>
