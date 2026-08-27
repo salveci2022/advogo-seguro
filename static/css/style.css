@@ -303,8 +303,38 @@ textarea.form-control { resize: vertical; min-height: 90px; }
 .mobile-topbar button { background: none; border: none; color: var(--branco); font-size: 1.4rem; }
 @media (max-width: 860px) {
   .app-shell { flex-direction: column; }
-  .sidebar { position: fixed; left: -280px; height: 100vh; z-index: 50; transition: left .2s; width: 250px; }
+
+  .sidebar {
+    position: fixed;
+    left: -280px;
+    height: 100vh;
+    height: 100dvh;
+    z-index: 50;
+    transition: left .2s;
+    width: 250px;
+    overflow: hidden;
+  }
+
   .sidebar.open { left: 0; }
+
+  .sidebar .brand,
+  .sidebar .plano-tag,
+  .sidebar .logout-link {
+    flex-shrink: 0;
+  }
+
+  .sidebar nav {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .sidebar .logout-link {
+    background: var(--azul-escuro);
+    padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  }
+
   .mobile-topbar { display: flex; }
   .main-content { padding: 20px 16px; }
 }
