@@ -29,7 +29,7 @@
     <div class="panel">
       <div class="panel-head"><h2>Processos cadastrados</h2></div>
       <div class="table-wrap">
-        <table class="spy-table" id="tabelaProcessos">
+        <table class="spy-table mobile-card-table" id="tabelaProcessos">
           <thead>
             <tr><th>Código</th><th>Nº Processo</th><th>Cliente</th><th>Advogado</th><th>Status</th><th>Criado em</th><th>Ações</th></tr>
           </thead>
@@ -246,17 +246,17 @@ async function carregarProcessos() {
     }
     corpo.innerHTML = lista.map(p => `
       <tr>
-        <td><code style="font-weight:700;">${escapeHtml(p.codigo_unico)}</code></td>
-        <td>${p.numero_processo ? escapeHtml(p.numero_processo) : '—'}</td>
-        <td>${escapeHtml(p.cliente_nome)}</td>
-        <td>${p.advogado_nome ? escapeHtml(p.advogado_nome) : '—'}</td>
-        <td>${badgeStatus(p.status)}</td>
-        <td>${escapeHtml(p.criado_em)}</td>
-        <td style="white-space:nowrap;">
-          <button class="btn-spy btn-spy-ghost" style="padding:6px 10px; font-size:0.8rem;" onclick="abrirModalEditarProcesso(${p.id})">✏️</button>
-          <button class="btn-spy btn-spy-ghost" style="padding:6px 10px; font-size:0.8rem;" onclick="abrirReenviarAcesso(${p.cliente_id})" title="Reenviar acesso ao cliente">📲</button>
-          <button class="btn-spy btn-spy-ghost" style="padding:6px 10px; font-size:0.8rem;" onclick="abrirLinkSemLogin('${p.link_cliente_seguro}', '${p.cliente_telefone || ''}')" title="Link sem login (Contato Seguro)">🔗</button>
-          <button class="btn-spy btn-spy-ghost" style="padding:6px 10px; font-size:0.8rem; color:var(--vermelho);" onclick="abrirModalExcluirProcesso(${p.id})">🗑️</button>
+        <td data-label="Código"><code style="font-weight:700;">${escapeHtml(p.codigo_unico)}</code></td>
+        <td data-label="Nº Processo">${p.numero_processo ? escapeHtml(p.numero_processo) : '—'}</td>
+        <td data-label="Cliente">${escapeHtml(p.cliente_nome)}</td>
+        <td data-label="Advogado">${p.advogado_nome ? escapeHtml(p.advogado_nome) : '—'}</td>
+        <td data-label="Status">${badgeStatus(p.status)}</td>
+        <td data-label="Criado em">${escapeHtml(p.criado_em)}</td>
+        <td data-label="Ações" style="white-space:nowrap;">
+          <button class="btn-spy btn-spy-ghost" style="padding:6px 10px; font-size:0.8rem;" onclick="abrirModalEditarProcesso(${p.id})" data-mobile-label="Editar" aria-label="Editar processo">✏️</button>
+          <button class="btn-spy btn-spy-ghost" style="padding:6px 10px; font-size:0.8rem;" onclick="abrirReenviarAcesso(${p.cliente_id})" title="Reenviar acesso ao cliente" data-mobile-label="Acesso">📲</button>
+          <button class="btn-spy btn-spy-ghost" style="padding:6px 10px; font-size:0.8rem;" onclick="abrirLinkSemLogin('${p.link_cliente_seguro}', '${p.cliente_telefone || ''}')" title="Link sem login (Contato Seguro)" data-mobile-label="Contato seguro">🔗</button>
+          <button class="btn-spy btn-spy-ghost" style="padding:6px 10px; font-size:0.8rem; color:var(--vermelho);" onclick="abrirModalExcluirProcesso(${p.id})" data-mobile-label="Excluir" aria-label="Excluir processo">🗑️</button>
         </td>
       </tr>
     `).join('');

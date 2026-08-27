@@ -39,7 +39,7 @@
     <div class="panel">
       <div class="panel-head"><h2>Advogados cadastrados</h2></div>
       <div class="table-wrap">
-        <table class="spy-table" id="tabelaAdvogados">
+        <table class="spy-table mobile-card-table" id="tabelaAdvogados">
           <thead>
             <tr><th>Foto</th><th>Nome</th><th>OAB</th><th>Telefone oficial</th><th>Status</th><th>Ações</th></tr>
           </thead>
@@ -334,17 +334,17 @@ async function carregarAdvogados() {
     }
     corpo.innerHTML = lista.map(a => `
       <tr>
-        <td>${a.foto_url ? `<img src="${a.foto_url}" alt="" style="width:38px;height:38px;border-radius:50%;object-fit:cover;">` : '👤'}</td>
-        <td><strong>${escapeHtml(a.nome)}</strong></td>
-        <td>${a.oab ? escapeHtml(a.oab) : '<span class="badge-pill badge-cinza">Não informado</span>'}</td>
-        <td>${escapeHtml(a.telefone_oficial)}</td>
-        <td>${badgeAtivoAdvogado(a.ativo)}</td>
-        <td style="white-space:nowrap;">
+        <td data-label="Foto">${a.foto_url ? `<img src="${a.foto_url}" alt="" style="width:38px;height:38px;border-radius:50%;object-fit:cover;">` : '👤'}</td>
+        <td data-label="Nome"><strong>${escapeHtml(a.nome)}</strong></td>
+        <td data-label="OAB">${a.oab ? escapeHtml(a.oab) : '<span class="badge-pill badge-cinza">Não informado</span>'}</td>
+        <td data-label="Telefone">${escapeHtml(a.telefone_oficial)}</td>
+        <td data-label="Status">${badgeAtivoAdvogado(a.ativo)}</td>
+        <td data-label="Ações" style="white-space:nowrap;">
           <button class="btn-spy btn-spy-ghost" style="padding:6px 12px; font-size:0.82rem;" onclick='abrirModalEditar(${JSON.stringify(a)})'>✏️ Editar</button>
           ${a.ativo
             ? `<button class="btn-spy btn-spy-ghost" style="padding:6px 12px; font-size:0.82rem;" onclick="abrirModalDesativar(${a.id}, true)">🚫 Desativar</button>`
             : `<button class="btn-spy btn-spy-ghost" style="padding:6px 12px; font-size:0.82rem;" onclick="abrirModalDesativar(${a.id}, false)">✅ Reativar</button>`}
-          <button class="btn-spy btn-spy-ghost" style="padding:6px 12px; font-size:0.82rem; color:var(--vermelho);" onclick="abrirModalExcluir(${a.id})">🗑️</button>
+          <button class="btn-spy btn-spy-ghost" style="padding:6px 12px; font-size:0.82rem; color:var(--vermelho);" onclick="abrirModalExcluir(${a.id})" data-mobile-label="Excluir">🗑️</button>
         </td>
       </tr>
     `).join('');
