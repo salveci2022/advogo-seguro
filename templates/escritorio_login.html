@@ -56,6 +56,10 @@
   text-align: left;
 }
 
+.login-trust-footer {
+  display: none;
+}
+
 @media (max-width: 899px) {
   .auth-wrap {
     min-height: 100vh;
@@ -123,6 +127,8 @@
     margin-top: -32px;
     position: relative;
     z-index: 2;
+    flex-direction: column;
+    justify-content: flex-start;
     background: linear-gradient(
       180deg,
       var(--cinza-claro) 0%,
@@ -163,6 +169,22 @@
   .auth-foot {
     margin-top: 22px;
     line-height: 1.45;
+  }
+
+  .login-trust-footer {
+    display: block;
+    width: 100%;
+    max-width: 440px;
+    margin: 22px auto 0;
+    text-align: center;
+    color: var(--texto-suave);
+    font-size: .78rem;
+    line-height: 1.5;
+  }
+
+  .login-trust-footer strong {
+    color: var(--azul-escuro);
+    font-weight: 700;
   }
 }
 
@@ -217,6 +239,12 @@
         Ainda não tem cadastro? <a href="/escritorio/cadastro">Cadastre seu escritório</a><br>
         <a href="/" style="color:var(--texto-suave); font-weight:500;">← Voltar para o início</a>
       </div>
+    </div>
+
+    <div class="login-trust-footer">
+      🔒 <strong>Acesso protegido</strong> &nbsp;•&nbsp;
+      Verificação de contatos &nbsp;•&nbsp;
+      Privacidade / LGPD
     </div>
   </div>
 </div>
