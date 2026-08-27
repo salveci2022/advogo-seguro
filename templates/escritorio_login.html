@@ -66,37 +66,41 @@
   .auth-side {
     display: flex !important;
     min-height: auto;
-    padding: 30px 22px 52px !important;
+    padding: 20px 20px 22px !important;
     justify-content: flex-start !important;
+    align-items: flex-start !important;
+    text-align: left;
   }
 
   .auth-side .login-main-brand {
     flex-direction: row;
     justify-content: flex-start;
-    gap: 12px;
-    margin-bottom: 22px;
-    font-size: 1.65rem;
-    letter-spacing: .5px;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 14px;
+    font-size: 1.45rem;
+    letter-spacing: .3px;
   }
 
   .auth-side .login-main-brand img {
-    width: 52px;
-    height: 52px;
+    width: 44px;
+    height: 44px;
   }
 
   .auth-side h2 {
     width: 100%;
     text-align: left;
-    font-size: 1.65rem;
-    margin-bottom: 10px;
+    font-size: 1.35rem;
+    margin: 0 0 8px;
   }
 
   .auth-side > p {
     width: 100%;
+    max-width: none;
     text-align: left;
-    margin: 0 0 18px;
-    font-size: .95rem;
-    line-height: 1.5;
+    margin: 0 0 10px;
+    font-size: .9rem;
+    line-height: 1.4;
   }
 
   .auth-side .trust-list {
@@ -104,17 +108,17 @@
   }
 
   .auth-side .trust-item {
-    margin-top: 10px;
-    font-size: .88rem;
-    line-height: 1.35;
+    margin-top: 7px;
+    font-size: .84rem;
+    line-height: 1.3;
   }
 
   .auth-form-col {
     flex: none;
     width: 100%;
     min-height: auto;
-    padding: 0 16px 34px;
-    margin-top: -28px;
+    padding: 0 16px 28px;
+    margin-top: -8px;
     position: relative;
     z-index: 2;
   }
@@ -122,9 +126,9 @@
   .auth-card {
     width: 100%;
     max-width: 430px;
-    padding: 30px 24px;
+    padding: 28px 22px;
     border-radius: 18px;
-    box-shadow: 0 18px 46px rgba(10,31,61,.18);
+    box-shadow: 0 16px 38px rgba(10,31,61,.16);
   }
 
   .auth-card .brand {
@@ -135,7 +139,7 @@
     font-size: 1rem;
     font-weight: 600;
     color: var(--azul-escuro);
-    margin-bottom: 24px;
+    margin-bottom: 22px;
   }
 }
 </style>
@@ -153,14 +157,13 @@
     <h2>Painel do Escritório</h2>
 
     <p>
-      Gerencie advogados, processos e acompanhe tentativas de golpe
-      contra seus clientes em um só lugar.
+      Gerencie advogados, processos e tentativas suspeitas em um só lugar.
     </p>
 
     <div class="trust-list">
-      <div class="trust-item"><span class="ic">✔</span><span>Cada processo gera um código único de verificação</span></div>
-      <div class="trust-item"><span class="ic">✔</span><span>Clientes confirmam contatos em segundos</span></div>
-      <div class="trust-item"><span class="ic">✔</span><span>Histórico completo de tentativas suspeitas</span></div>
+      <div class="trust-item"><span class="ic">✔</span><span>Código único por processo</span></div>
+      <div class="trust-item"><span class="ic">✔</span><span>Confirmação rápida de contatos</span></div>
+      <div class="trust-item"><span class="ic">✔</span><span>Histórico centralizado</span></div>
     </div>
   </div>
 
