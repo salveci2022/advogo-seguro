@@ -105,8 +105,8 @@
     max-width: none;
     text-align: left;
     margin: 0 0 14px;
-    font-size: .95rem;
-    line-height: 1.45;
+    font-size: 1rem;
+    line-height: 1.5;
   }
 
   .auth-side .trust-list {
@@ -115,8 +115,8 @@
 
   .auth-side .trust-item {
     margin-top: 9px;
-    font-size: .9rem;
-    line-height: 1.35;
+    font-size: .98rem;
+    line-height: 1.4;
   }
 
   .auth-form-col {
@@ -166,9 +166,14 @@
     font-size: 1rem;
   }
 
+  .login-forgot-link {
+    font-size: .9rem !important;
+  }
+
   .auth-foot {
     margin-top: 22px;
-    line-height: 1.45;
+    font-size: .95rem;
+    line-height: 1.55;
   }
 
   .login-trust-footer {
@@ -178,8 +183,8 @@
     margin: 22px auto 0;
     text-align: center;
     color: var(--texto-suave);
-    font-size: .78rem;
-    line-height: 1.5;
+    font-size: .9rem;
+    line-height: 1.55;
   }
 
   .login-trust-footer strong {
@@ -229,7 +234,7 @@
           <label>Senha</label>
           <input type="password" class="form-control" id="senha" required placeholder="••••••••">
           <div style="text-align:right; margin-top:6px;">
-            <a href="#" onclick="abrirModalEsqueci(); return false;" style="font-size:0.82rem; color:var(--azul-medio); font-weight:600;">Esqueci minha senha</a>
+            <a href="#" class="login-forgot-link" onclick="abrirModalEsqueci(); return false;" style="font-size:0.82rem; color:var(--azul-medio); font-weight:600;">Esqueci minha senha</a>
           </div>
         </div>
         <button type="submit" class="btn-spy btn-spy-primary btn-spy-block" id="btnEntrar">Entrar</button>
