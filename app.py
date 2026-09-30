@@ -272,12 +272,11 @@ def _carregar_mapa_stripe(valor):
         if not isinstance(precos_brutos, dict):
             raise RuntimeError(f'Preços Stripe inválidos para o plano {codigo}.')
         mensal = str(precos_brutos.get('mensal') or '').strip()
-        implantacao = str(precos_brutos.get('implantacao') or '').strip()
-        if not mensal.startswith('price_') or not implantacao.startswith('price_'):
+        if not mensal.startswith('price_'):
             raise RuntimeError(
-                f'O plano {codigo} precisa dos IDs Stripe mensal e implantacao.'
+                f'O plano {codigo} precisa do ID Stripe mensal.'
             )
-        mapa[codigo] = {'mensal': mensal, 'implantacao': implantacao}
+        mapa[codigo] = {'mensal': mensal}
     return mapa
 
 
@@ -3817,9 +3816,9 @@ def criar_checkout_stripe():
             subscription_data['trial_settings'] = {
                 'end_behavior': {'missing_payment_method': 'cancel'}
             }
+        # Regra comercial vigente: não há taxa de implantação.
+        # O checkout Stripe cobra somente a assinatura mensal.
         line_items = [{'price': precos['mensal'], 'quantity': 1}]
-        if not request.escritorio.taxa_implantacao_paga_em:
-            line_items.append({'price': precos['implantacao'], 'quantity': 1})
 
         argumentos = {
             'mode': 'subscription',
