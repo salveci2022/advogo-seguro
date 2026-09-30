@@ -187,19 +187,19 @@ PLANOS_ADVOGO_SEGURO = {
     'profissional': {
         'nome': 'Proteção Profissional',
         'preco_mensal': 179.00,
-        'implantacao': 297.00,
+        'implantacao': 0.00,
         'limite_advogados': 1,
     },
     'escritorio': {
         'nome': 'Escritório Protegido',
         'preco_mensal': 497.00,
-        'implantacao': 697.00,
+        'implantacao': 0.00,
         'limite_advogados': 5,
     },
     'blindagem': {
         'nome': 'Blindagem Jurídica',
         'preco_mensal': 997.00,
-        'implantacao': 1497.00,
+        'implantacao': 0.00,
         'limite_advogados': 20,
     },
     'corporativo': {
