@@ -26,7 +26,7 @@ def _confirmar(client, registro):
     return resposta.get_json()
 
 
-def test_registro_confirma_email_sem_liberar_teste_antes_do_checkout(client):
+def test_registro_confirma_email_sem_liberar_plano_antes_do_checkout(client):
     registro = _registro_comercial(client)
     assert registro['confirmacao_email'] is True
     assert len(registro['codigo_dev']) == 6
@@ -45,10 +45,9 @@ def test_registro_confirma_email_sem_liberar_teste_antes_do_checkout(client):
     dados = status.get_json()
     assert dados['assinatura_status'] == 'aguardando_pagamento'
     assert dados['plano_ativo'] is False
-    assert dados['trial_dias'] == 2
 
 
-def test_um_cnpj_nao_cria_duas_contas_de_teste(client):
+def test_um_cnpj_nao_cria_duas_contas_comerciais(client):
     primeiro = _registro_comercial(client, 'primeiro@escritorio.com', '12.345.678/0001-95')
     _confirmar(client, primeiro)
     repetido = client.post('/api/comercial/registro', json={
@@ -62,7 +61,7 @@ def test_um_cnpj_nao_cria_duas_contas_de_teste(client):
     assert 'CNPJ' in repetido.get_json()['erro']
 
 
-def test_checkout_cobra_implantacao_e_configura_teste_de_dois_dias(client, monkeypatch):
+def test_checkout_cobra_somente_mensalidade_sem_periodo_gratuito(client, monkeypatch):
     registro = _registro_comercial(client)
     confirmacao = _confirmar(client, registro)
     token = confirmacao['token']
@@ -71,7 +70,7 @@ def test_checkout_cobra_implantacao_e_configura_teste_de_dois_dias(client, monke
 
     monkeypatch.setattr(appmodule, 'STRIPE_SECRET_KEY', 'sk_test_segura')
     monkeypatch.setattr(appmodule, 'STRIPE_PRICE_MAP', {
-        'escritorio': {'mensal': 'price_mensal', 'implantacao': 'price_implantacao'}
+        'escritorio': {'mensal': 'price_mensal'}
     })
     monkeypatch.setattr(appmodule, 'PUBLIC_BASE_URL', 'https://advogo-seguro.example')
 
@@ -81,75 +80,86 @@ def test_checkout_cobra_implantacao_e_configura_teste_de_dois_dias(client, monke
 
     monkeypatch.setattr(appmodule.stripe.checkout.Session, 'create', criar_sessao)
     resposta = client.post('/api/comercial/checkout', json={'plano': 'escritorio'}, headers=headers)
+
     assert resposta.status_code == 200, resposta.get_json()
     assert resposta.get_json()['checkout_url'].startswith('https://checkout.stripe.test/')
     assert capturado['mode'] == 'subscription'
     assert capturado['payment_method_collection'] == 'always'
-    assert capturado['subscription_data']['trial_period_days'] == 2
     assert capturado['line_items'] == [
         {'price': 'price_mensal', 'quantity': 1},
-        {'price': 'price_implantacao', 'quantity': 1},
     ]
+    assert capturado['subscription_data']['metadata']['plano'] == 'escritorio'
+    assert 'trial_period_days' not in capturado['subscription_data']
+    assert 'trial_settings' not in capturado['subscription_data']
     assert 'add_invoice_items' not in capturado['subscription_data']
 
-
-def test_sincronizacao_libera_trial_por_48_horas_e_nao_plano_pago(client, monkeypatch):
+def test_sincronizacao_ativa_plano_pago_sem_periodo_gratuito(client, monkeypatch):
     registro = _registro_comercial(client)
     confirmacao = _confirmar(client, registro)
     headers = {'Authorization': f"Bearer {confirmacao['token']}"}
+
     monkeypatch.setattr(appmodule, 'STRIPE_SECRET_KEY', 'sk_test_segura')
     monkeypatch.setattr(appmodule, 'STRIPE_PRICE_MAP', {
-        'escritorio': {'mensal': 'price_mensal', 'implantacao': 'price_implantacao'}
+        'escritorio': {'mensal': 'price_mensal'}
     })
     monkeypatch.setattr(appmodule, 'PUBLIC_BASE_URL', 'https://advogo-seguro.example')
     monkeypatch.setattr(
         appmodule.stripe.checkout.Session, 'create',
-        lambda **kwargs: SimpleNamespace(id='cs_test_48h', url='https://checkout.stripe.test/48h')
+        lambda **kwargs: SimpleNamespace(id='cs_test_pago', url='https://checkout.stripe.test/pago')
     )
+
     checkout = client.post('/api/comercial/checkout', json={'plano': 'escritorio'}, headers=headers)
     assert checkout.status_code == 200
 
     with appmodule.app.app_context():
         escritorio = appmodule.Escritorio.query.filter_by(email=registro['email']).first()
         escritorio_id = escritorio.id
-        fim = appmodule.agora_utc() + timedelta(days=2)
 
     monkeypatch.setattr(
         appmodule.stripe.checkout.Session, 'retrieve',
         lambda session_id: SimpleNamespace(
-            id=session_id, client_reference_id=str(escritorio_id),
-            subscription='sub_48h', payment_status='paid'
+            id=session_id,
+            client_reference_id=str(escritorio_id),
+            subscription='sub_paga',
+            payment_status='paid',
         )
     )
     monkeypatch.setattr(
         appmodule.stripe.Subscription, 'retrieve',
         lambda subscription_id: SimpleNamespace(
-            id=subscription_id, customer='cus_48h', status='trialing',
-            trial_end=int(fim.replace(tzinfo=timezone.utc).timestamp()),
-            metadata={'escritorio_id': str(escritorio_id), 'plano': 'escritorio'}
+            id=subscription_id,
+            customer='cus_paga',
+            status='active',
+            metadata={'escritorio_id': str(escritorio_id), 'plano': 'escritorio'},
         )
     )
+
     sincronizacao = client.post(
         '/api/comercial/checkout/sincronizar',
-        json={'session_id': 'cs_test_48h'}, headers=headers
+        json={'session_id': 'cs_test_pago'},
+        headers=headers,
     )
+
     assert sincronizacao.status_code == 200, sincronizacao.get_json()
-    assert sincronizacao.get_json()['plano'] == 'trial'
+    assert sincronizacao.get_json()['plano'] == 'escritorio'
+    assert sincronizacao.get_json()['assinatura_status'] == 'active'
 
     with appmodule.app.app_context():
         escritorio = appmodule.Escritorio.query.filter_by(email=registro['email']).first()
-        assert escritorio.assinatura_status == 'trialing'
-        assert escritorio.plano == 'trial'
+        assert escritorio.assinatura_status == 'active'
+        assert escritorio.plano == 'escritorio'
         assert escritorio.plano_ativo() is True
-        assert escritorio.taxa_implantacao_paga_em is not None
-        restante = escritorio.plano_expira - appmodule.agora_utc()
-        assert timedelta(hours=47, minutes=55) < restante <= timedelta(days=2)
+        assert escritorio.plano_expira is None
+        assert escritorio.trial_utilizado_em is None
+        assert escritorio.taxa_implantacao_paga_em is None
 
-
-def test_texto_publico_nao_possui_data_fixa(client):
-    for rota in ('/planos', '/escritorio/cadastro', '/contratacao'):
+def test_texto_publico_nao_oferece_teste_gratuito_nem_data_fixa(client):
+    for rota in ('/', '/planos', '/escritorio/cadastro', '/contratacao', '/contratacao/sucesso'):
         texto = client.get(rota).get_data(as_text=True)
-        assert 'Teste gratuito por 2 dias' in texto or 'teste gratuito por 2 dias' in texto
+        assert 'Teste gratuito' not in texto
+        assert 'teste gratuito' not in texto
+        assert 'Testar por 2 dias' not in texto
+        assert 'teste por 2 dias' not in texto
         assert '16/08/2026' not in texto
 
 
