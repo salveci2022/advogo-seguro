@@ -164,8 +164,6 @@ PRIVACY_CONTACT_EMAIL = os.environ.get('PRIVACY_CONTACT_EMAIL', '').strip()
 LGPD_RETENCAO_LOGS_DIAS = int(os.environ.get('LGPD_RETENCAO_LOGS_DIAS', '0'))
 if LGPD_RETENCAO_LOGS_DIAS < 0:
     raise RuntimeError('LGPD_RETENCAO_LOGS_DIAS não pode ser negativo.')
-if TRIAL_DIAS != 2:
-    raise RuntimeError('TRIAL_DIAS deve permanecer em 2 conforme a regra comercial vigente.')
 if EMAIL_CONFIRMATION_TTL_MINUTES < 5 or EMAIL_CONFIRMATION_TTL_MINUTES > 60:
     raise RuntimeError('EMAIL_CONFIRMATION_TTL_MINUTES deve ficar entre 5 e 60 minutos.')
 
@@ -179,7 +177,7 @@ stripe.api_key = STRIPE_SECRET_KEY or None
 # esta integração NÃO cria nem remove colunas do banco de dados.
 PLANOS_ADVOGO_SEGURO = {
     'trial': {
-        'nome': 'Período de Teste',
+        'nome': 'Acesso Pendente',
         'preco_mensal': 0.00,
         'implantacao': 0.00,
         'limite_advogados': 1,
@@ -1121,7 +1119,7 @@ def enviar_email_confirmacao_escritorio(destinatario, codigo):
         'Confirme o cadastro do seu escritório no ADVOGO SEGURO.\n\n'
         f'Código de confirmação: {codigo}\n\n'
         f'O código expira em {EMAIL_CONFIRMATION_TTL_MINUTES} minutos. '
-        'Depois da confirmação, conclua a contratação para iniciar o teste gratuito por 2 dias.\n\n'
+        'Depois da confirmação, conclua a contratação para ativar o plano escolhido.\n\n'
         'Se você não realizou este cadastro, ignore esta mensagem.'
     )
     return _enviar_mensagem_smtp(mensagem)
@@ -1965,7 +1963,7 @@ def processos():
             ).count()
             if processos_existentes >= 1:
                 return jsonify({
-                    'erro': 'O teste gratuito permite 1 cliente e 1 processo.',
+                    'erro': 'O acesso temporário legado permite 1 cliente e 1 processo.',
                     'limite_plano': True,
                 }), 403
         data = request.get_json() or {}
@@ -3723,7 +3721,7 @@ def criar_checkout_stripe():
         return jsonify({'erro': 'Este escritório já possui uma assinatura em andamento.'}), 409
     cnpj = _somente_digitos(request.escritorio.cnpj)
     if len(cnpj) != 14 or _outro_escritorio_ja_usou_beneficio(cnpj, request.escritorio.id):
-        return jsonify({'erro': 'Este CNPJ já utilizou o benefício de teste.'}), 409
+        return jsonify({'erro': 'Este CNPJ já está vinculado a outro cadastro ou assinatura.'}), 409
     precos = STRIPE_PRICE_MAP.get(plano)
     if not precos:
         return jsonify({'erro': 'Preço do plano ainda não configurado.'}), 503
@@ -3731,12 +3729,10 @@ def criar_checkout_stripe():
     try:
         base = _url_publica_obrigatoria()
         metadata = {'escritorio_id': str(request.escritorio.id), 'plano': plano}
+        # Novas contratações iniciam a assinatura imediatamente, sem período gratuito.
+        # O suporte a status Stripe "trialing" permanece apenas para compatibilidade
+        # com assinaturas antigas já existentes.
         subscription_data = {'metadata': metadata}
-        if not request.escritorio.trial_utilizado_em:
-            subscription_data['trial_period_days'] = TRIAL_DIAS
-            subscription_data['trial_settings'] = {
-                'end_behavior': {'missing_payment_method': 'cancel'}
-            }
         # Regra comercial vigente: não há taxa de implantação.
         # O checkout Stripe cobra somente a assinatura mensal.
         line_items = [{'price': precos['mensal'], 'quantity': 1}]
@@ -3787,9 +3783,8 @@ def sincronizar_checkout_stripe():
         assinatura_id = _valor_objeto(sessao, 'subscription')
         assinatura = _recuperar_assinatura_stripe(assinatura_id)
         escritorio = _sincronizar_assinatura_stripe(assinatura)
-        if _valor_objeto(sessao, 'payment_status') == 'paid' and not escritorio.taxa_implantacao_paga_em:
-            escritorio.taxa_implantacao_paga_em = agora_utc()
-            db.session.commit()
+        # Não há taxa de implantação nas novas contratações online.
+        # O campo legado taxa_implantacao_paga_em é preservado apenas para compatibilidade histórica.
     except (stripe.StripeError, LookupError, ValueError):
         app.logger.exception('Falha ao sincronizar checkout session_id=%s.', session_id)
         return jsonify({'erro': 'Pagamento recebido; a ativação ainda está sendo processada.'}), 202
@@ -3869,8 +3864,8 @@ def webhook_stripe():
             escritorio.stripe_customer_id = str(_valor_objeto(dados_evento, 'customer') or '')
             assinatura = _recuperar_assinatura_stripe(_valor_objeto(dados_evento, 'subscription'))
             escritorio = _sincronizar_assinatura_stripe(assinatura)
-            if _valor_objeto(dados_evento, 'payment_status') == 'paid' and not escritorio.taxa_implantacao_paga_em:
-                escritorio.taxa_implantacao_paga_em = agora_utc()
+            # Não há taxa de implantação nas novas contratações online.
+            # O campo legado taxa_implantacao_paga_em não é atualizado por novos checkouts.
             resultado = 'checkout_sincronizado'
         elif tipo in {
             'customer.subscription.created',

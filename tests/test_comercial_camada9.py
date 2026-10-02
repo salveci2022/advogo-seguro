@@ -25,14 +25,14 @@ def test_catalogo_precos_limites_e_implantacao():
     assert p['profissional'] == {
         'nome': 'Proteção Profissional',
         'preco_mensal': 179.00,
-        'implantacao': 297.00,
+        'implantacao': 0.00,
         'limite_advogados': 1,
     }
     assert p['escritorio']['preco_mensal'] == 497.00
-    assert p['escritorio']['implantacao'] == 697.00
+    assert p['escritorio']['implantacao'] == 0.00
     assert p['escritorio']['limite_advogados'] == 5
     assert p['blindagem']['preco_mensal'] == 997.00
-    assert p['blindagem']['implantacao'] == 1497.00
+    assert p['blindagem']['implantacao'] == 0.00
     assert p['blindagem']['limite_advogados'] == 20
     assert p['corporativo']['preco_mensal'] == 1597.00
     assert p['corporativo']['implantacao'] is None
@@ -43,8 +43,6 @@ def test_pagina_e_api_planos_usam_fonte_unica_sem_placeholder(client):
     api = client.get('/api/publico/planos')
     assert api.status_code == 200
     dados = api.get_json()
-    assert dados['trial_dias'] == 2
-    assert dados['trial_limite_advogados'] == 1
     assert [p['preco_mensal'] for p in dados['planos']] == [179.0, 497.0, 997.0, 1597.0]
 
     html = client.get('/planos')
@@ -55,7 +53,8 @@ def test_pagina_e_api_planos_usam_fonte_unica_sem_placeholder(client):
     assert 'Substitua este texto' not in texto
     assert 'Controle de usuários e permissões' not in texto
     assert 'MAIS CONTRATADO' not in texto
-    assert 'Teste gratuito por 2 dias' in texto
+    assert 'Teste gratuito' not in texto
+    assert '2 dias' not in texto
 
 
 def test_home_sidebar_e_url_antiga_apontam_para_planos(client):
@@ -67,7 +66,7 @@ def test_home_sidebar_e_url_antiga_apontam_para_planos(client):
     assert 'url=/planos' in antigo
 
 
-def test_cadastro_comercial_nasce_inativo_sem_trial_gratuito(client):
+def test_cadastro_comercial_nasce_inativo_aguardando_contratacao(client):
     headers = registrar(client, 'trial-comercial@teste.com')
     plano = client.get('/api/escritorio/plano', headers=headers)
     assert plano.status_code == 200
@@ -81,7 +80,7 @@ def test_cadastro_comercial_nasce_inativo_sem_trial_gratuito(client):
         assert e.plano_expira <= appmodule.agora_utc()
 
 
-def test_cancelado_nao_aparece_como_trial(client):
+def test_cancelado_nao_aparece_como_acesso_pendente(client):
     headers = registrar(client, 'cancelado@teste.com')
     with appmodule.app.app_context():
         e = Escritorio.query.filter_by(email='cancelado@teste.com').first()
