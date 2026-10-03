@@ -3027,6 +3027,9 @@ def contato_seguro_publico(token):
     Rota pública e segura: NÃO lista clientes, NÃO aceita busca por nome/telefone —
     só funciona com o token exato, longo e aleatório, gerado na criação do processo.
     """
+    permitido, espera = verificar_limite_acao('cliente-publico-link-seguro', 60, 60)
+    if not permitido:
+        return jsonify({'erro': f'Muitas solicitações. Tente novamente em {espera} segundos.'}), 429
     processo = Processo.query.filter_by(token_cliente=token, status='ativo').first()
 
     db.session.add(AcessoPublicoLog(
@@ -3066,6 +3069,9 @@ def registrar_alerta_publico(token):
     acessíveis sem login. Sempre responde de forma genérica para não confirmar
     nem negar a existência do token a quem está só "tentando a sorte".
     """
+    permitido, espera = verificar_limite_acao('cliente-publico-link-seguro', 60, 60)
+    if not permitido:
+        return jsonify({'erro': f'Muitas solicitações. Tente novamente em {espera} segundos.'}), 429
     processo = Processo.query.filter_by(token_cliente=token, status='ativo').first()
     data = request.get_json() or {}
     tipo = data.get('tipo', 'nao_reconheco')  # nao_reconheco | pix | suspeita_geral
@@ -3143,11 +3149,17 @@ def cliente_publico_contato_ativo(token):
 @app.route('/api/cliente-publico/analisar-golpe/<token>', methods=['POST'])
 def cliente_publico_analisar_golpe(token):
     """
+    permitido, espera = verificar_limite_acao('cliente-publico-link-seguro', 60, 60)
+    if not permitido:
+        return jsonify({'erro': f'Muitas solicitações. Tente novamente em {espera} segundos.'}), 429
     IA Anti-Golpe já vinculada ao token do cliente (em vez do endpoint genérico
     /api/ia/analisar-golpe) — assim a tentativa suspeita de alto risco já é
     registrada automaticamente no processo correto, sem o cliente precisar
     informar nenhum código.
     """
+    permitido, espera = verificar_limite_acao('cliente-publico-link-seguro', 60, 60)
+    if not permitido:
+        return jsonify({'erro': f'Muitas solicitações. Tente novamente em {espera} segundos.'}), 429
     processo = Processo.query.filter_by(token_cliente=token, status='ativo').first()
     if not processo:
         return jsonify({'valido': False, 'mensagem': 'Link inválido ou expirado.'}), 404
