@@ -2057,6 +2057,9 @@ def processos():
 @app.route('/api/escritorio/processos/<int:processo_id>', methods=['PUT', 'DELETE'])
 @login_escritorio_obrigatorio
 def processo_detalhe(processo_id):
+    if not request.escritorio.plano_ativo():
+        return jsonify({'erro': 'Plano inativo. Assine para continuar.', 'limite': True}), 403
+
     processo = Processo.query.filter_by(id=processo_id, escritorio_id=request.escritorio.id).first()
     if not processo:
         return jsonify({'erro': 'Processo não encontrado'}), 404
