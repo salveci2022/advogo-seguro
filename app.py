@@ -1689,6 +1689,9 @@ def advogados():
 @app.route('/api/escritorio/advogados/<int:advogado_id>', methods=['PUT', 'DELETE'])
 @login_escritorio_obrigatorio
 def advogado_detalhe(advogado_id):
+    if not request.escritorio.plano_ativo():
+        return jsonify({'erro': 'Plano inativo. Regularize o acesso para continuar.'}), 403
+
     adv = Advogado.query.filter_by(id=advogado_id, escritorio_id=request.escritorio.id).first()
     if not adv:
         return jsonify({'erro': 'Advogado não encontrado'}), 404
@@ -1753,6 +1756,9 @@ def resumo_exclusao_advogado(advogado_id):
 @app.route('/api/escritorio/advogados/<int:advogado_id>/desativar', methods=['POST'])
 @login_escritorio_obrigatorio
 def desativar_advogado(advogado_id):
+    if not request.escritorio.plano_ativo():
+        return jsonify({'erro': 'Plano inativo. Regularize o acesso para continuar.'}), 403
+
     adv = Advogado.query.filter_by(id=advogado_id, escritorio_id=request.escritorio.id).first()
     if not adv:
         return jsonify({'erro': 'Advogado não encontrado'}), 404
@@ -1904,6 +1910,9 @@ def foto_advogado_publica(token):
 @app.route('/api/escritorio/advogados/<int:advogado_id>/foto', methods=['POST'])
 @login_escritorio_obrigatorio
 def upload_foto_advogado(advogado_id):
+    if not request.escritorio.plano_ativo():
+        return jsonify({'erro': 'Plano inativo. Regularize o acesso para continuar.'}), 403
+
     """Persiste a foto do advogado no banco; não depende do disco local da aplicação."""
     adv = Advogado.query.filter_by(id=advogado_id, escritorio_id=request.escritorio.id).first()
     if not adv:
