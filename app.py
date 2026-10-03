@@ -3410,6 +3410,9 @@ def _pdf_response(story, nome_arquivo):
 @app.route('/api/escritorio/relatorio/contato-seguro/<int:contato_id>/pdf', methods=['GET'])
 @login_escritorio_obrigatorio
 def relatorio_contato_seguro_pdf(contato_id):
+    if not request.escritorio.plano_ativo():
+        return jsonify({'erro': 'Plano inativo. Regularize o acesso para continuar.'}), 403
+
     contato = ContatoSeguro.query.filter_by(id=contato_id, escritorio_id=request.escritorio.id).first()
     if not contato:
         return jsonify({'erro': 'Contato seguro não encontrado.'}), 404
@@ -3437,6 +3440,9 @@ def relatorio_contato_seguro_pdf(contato_id):
 @app.route('/api/escritorio/relatorio/tentativa/<int:tentativa_id>/pdf', methods=['GET'])
 @login_escritorio_obrigatorio
 def relatorio_tentativa_pdf(tentativa_id):
+    if not request.escritorio.plano_ativo():
+        return jsonify({'erro': 'Plano inativo. Regularize o acesso para continuar.'}), 403
+
     tentativa = TentativaContato.query.join(Processo).filter(
         TentativaContato.id == tentativa_id, Processo.escritorio_id == request.escritorio.id
     ).first()
@@ -3469,6 +3475,9 @@ def relatorio_mensal_pdf():
     Relatório mensal de verificações: aceita ?mes=MM&ano=AAAA (padrão: mês atual).
     Reúne tentativas suspeitas e CCAs do período para visão consolidada do escritório.
     """
+    if not request.escritorio.plano_ativo():
+        return jsonify({'erro': 'Plano inativo. Regularize o acesso para continuar.'}), 403
+
     agora = agora_utc()
     mes = int(request.args.get('mes', agora.month))
     ano = int(request.args.get('ano', agora.year))
@@ -3527,6 +3536,9 @@ def relatorio_mensal_pdf():
 @login_escritorio_obrigatorio
 def relatorio_processo_pdf(processo_id):
     """Relatório consolidado por cliente/processo (4º tipo de relatório do briefing)."""
+    if not request.escritorio.plano_ativo():
+        return jsonify({'erro': 'Plano inativo. Regularize o acesso para continuar.'}), 403
+
     processo = Processo.query.filter_by(id=processo_id, escritorio_id=request.escritorio.id).first()
     if not processo:
         return jsonify({'erro': 'Processo não encontrado.'}), 404
