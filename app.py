@@ -3223,7 +3223,7 @@ def verificar_contato_publico():
             numero_suspeito=numero,
             canal=canal,
             descricao=data.get('descricao', ''),
-            confirmado_golpe=(resultado == 'numero_diferente')
+            confirmado_golpe=False
         )
         db.session.add(tentativa)
         db.session.commit()
