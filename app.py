@@ -2447,6 +2447,8 @@ def cancelar_contato_seguro(contato_id):
 @login_escritorio_obrigatorio
 def reiniciar_contato_seguro(contato_id):
     """Cancela o CCA antigo e gera um novo, com nova validade de 10 minutos (Sprint 3)."""
+    if not request.escritorio.plano_ativo():
+        return jsonify({'erro': 'Plano inativo. Regularize o acesso para continuar.'}), 403
     antigo = ContatoSeguro.query.filter_by(id=contato_id, escritorio_id=request.escritorio.id).first()
     if not antigo:
         return jsonify({'erro': 'Contato seguro não encontrado.'}), 404
