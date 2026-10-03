@@ -2282,7 +2282,10 @@ def resumo_exclusao_cliente(cliente_id):
     return jsonify({
         'processos': len(processos_ids),
         'tentativas_suspeitas': TentativaContato.query.filter(TentativaContato.processo_id.in_(processos_ids)).count() if processos_ids else 0,
-        'contatos_seguros': ContatoSeguro.query.filter_by(cliente_id=cliente.id).count(),
+        'contatos_seguros': ContatoSeguro.query.filter_by(
+            cliente_id=cliente.id,
+            escritorio_id=request.escritorio.id
+        ).count(),
         'compartilhado_com_outro_escritorio': _cliente_possui_processos_de_outro_escritorio(cliente.id, request.escritorio.id)
     })
 
