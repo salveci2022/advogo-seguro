@@ -3082,7 +3082,7 @@ def registrar_alerta_publico(token):
             numero_suspeito=data.get('numero', ''),
             canal=data.get('canal', 'whatsapp'),
             descricao=data.get('descricao') or f'Alerta registrado pelo cliente via link seguro ({tipo}).',
-            confirmado_golpe=(tipo == 'pix')
+            confirmado_golpe=False
         ))
 
     db.session.commit()
