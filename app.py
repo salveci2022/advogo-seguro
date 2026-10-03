@@ -3336,6 +3336,9 @@ def analisar_golpe():
     link sem login). Não expõe dados de outros clientes — analisa apenas o
     texto enviado nesta própria requisição.
     """
+    permitido, espera = verificar_limite_acao('ia-publica', 30, 60)
+    if not permitido:
+        return jsonify({'erro': f'Muitas análises. Tente novamente em {espera} segundos.'}), 429
     data = request.get_json() or {}
     texto_mensagem = data.get('texto_mensagem', '')
     numero_suspeito = data.get('numero_suspeito', '')
@@ -3349,7 +3352,7 @@ def analisar_golpe():
     numero_oficial_bate = None
     processo = None
     if codigo_processo:
-        processo = Processo.query.filter_by(codigo_unico=codigo_processo.strip().upper()).first()
+        processo = Processo.query.filter_by(codigo_unico=codigo_processo.strip().upper(), status='ativo').first()
     if processo and processo.advogado and numero_suspeito:
         numero_digitos = ''.join(filter(str.isdigit, numero_suspeito))
         oficial_digitos = ''.join(filter(str.isdigit, processo.advogado.telefone_oficial))
@@ -3368,7 +3371,7 @@ def analisar_golpe():
             numero_suspeito=numero_suspeito,
             canal=canal,
             descricao=f"[IA Anti-Golpe — risco {resultado['risco']}] {texto_mensagem[:400]}",
-            confirmado_golpe=(resultado['pontuacao'] >= 70)
+            confirmado_golpe=False
         ))
         db.session.commit()
 
