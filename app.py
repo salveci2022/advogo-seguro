@@ -3027,7 +3027,7 @@ def contato_seguro_publico(token):
     Rota pública e segura: NÃO lista clientes, NÃO aceita busca por nome/telefone —
     só funciona com o token exato, longo e aleatório, gerado na criação do processo.
     """
-    processo = Processo.query.filter_by(token_cliente=token).first()
+    processo = Processo.query.filter_by(token_cliente=token, status='ativo').first()
 
     db.session.add(AcessoPublicoLog(
         processo_id=processo.id if processo else None,
@@ -3066,7 +3066,7 @@ def registrar_alerta_publico(token):
     acessíveis sem login. Sempre responde de forma genérica para não confirmar
     nem negar a existência do token a quem está só "tentando a sorte".
     """
-    processo = Processo.query.filter_by(token_cliente=token).first()
+    processo = Processo.query.filter_by(token_cliente=token, status='ativo').first()
     data = request.get_json() or {}
     tipo = data.get('tipo', 'nao_reconheco')  # nao_reconheco | pix | suspeita_geral
 
@@ -3115,7 +3115,7 @@ def cliente_publico_seguro(token):
 @app.route('/api/cliente-publico/contato-ativo/<token>', methods=['GET'])
 def cliente_publico_contato_ativo(token):
     """Versão enxuta: só responde se há (ou não) contato autorizado ativo agora, sem os demais dados do advogado."""
-    processo = Processo.query.filter_by(token_cliente=token).first()
+    processo = Processo.query.filter_by(token_cliente=token, status='ativo').first()
 
     db.session.add(AcessoPublicoLog(
         processo_id=processo.id if processo else None,
@@ -3148,7 +3148,7 @@ def cliente_publico_analisar_golpe(token):
     registrada automaticamente no processo correto, sem o cliente precisar
     informar nenhum código.
     """
-    processo = Processo.query.filter_by(token_cliente=token).first()
+    processo = Processo.query.filter_by(token_cliente=token, status='ativo').first()
     if not processo:
         return jsonify({'valido': False, 'mensagem': 'Link inválido ou expirado.'}), 404
 
