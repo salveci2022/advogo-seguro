@@ -69,6 +69,21 @@
       <form id="formCadastro">
 
         <div class="form-group">
+          <label>Tipo de cadastro</label>
+
+          <div style="display:flex;flex-direction:column;gap:6px;">
+            <label style="display:flex;gap:8px;align-items:center;font-weight:500;">
+              <input type="radio" name="tipoPessoa" value="PJ" checked>
+              Pessoa Jurídica — Escritório
+            </label>
+            <label style="display:flex;gap:8px;align-items:center;font-weight:500;">
+              <input type="radio" name="tipoPessoa" value="PF">
+              Pessoa Física — Advogado
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group">
           <label for="plano">Plano escolhido</label>
 
           <select class="form-control" id="plano" required>
@@ -87,7 +102,7 @@
         </div>
 
         <div class="form-group">
-          <label for="nome">Nome do escritório</label>
+          <label for="nome" id="labelNome">Nome do escritório</label>
 
           <input
             type="text"
@@ -99,7 +114,23 @@
           >
         </div>
 
-        <div class="form-group">
+        <div class="form-group" id="grupoCpf" hidden>
+          <label for="cpf">CPF</label>
+
+          <input
+            type="text"
+            class="form-control"
+            id="cpf"
+            inputmode="numeric"
+            maxlength="14"
+            placeholder="000.000.000-00"
+          >
+          <small style="color:var(--texto-suave);">
+            Pessoa Física pode contratar somente o plano Proteção Profissional (1 advogado).
+          </small>
+        </div>
+
+        <div class="form-group" id="grupoCnpj">
           <label for="cnpj">CNPJ</label>
 
           <input
@@ -196,6 +227,57 @@ if (['profissional', 'escritorio', 'blindagem'].includes(planoUrl)) {
   document.getElementById('plano').value = planoUrl;
 }
 
+function tipoPessoaSelecionado() {
+  return document.querySelector('input[name="tipoPessoa"]:checked').value;
+}
+
+function aplicarTipoPessoa() {
+  const pf = tipoPessoaSelecionado() === 'PF';
+  const plano = document.getElementById('plano');
+  const cpf = document.getElementById('cpf');
+  const cnpj = document.getElementById('cnpj');
+
+  document.getElementById('grupoCpf').hidden = !pf;
+  document.getElementById('grupoCnpj').hidden = pf;
+  cpf.required = pf;
+  cnpj.required = !pf;
+
+  // Pessoa Física: somente Proteção Profissional (o backend também valida).
+  Array.from(plano.options).forEach(opcao => {
+    opcao.disabled = pf && opcao.value !== 'profissional';
+  });
+  if (pf) {
+    plano.value = 'profissional';
+  }
+
+  document.getElementById('labelNome').textContent =
+    pf ? 'Nome completo' : 'Nome do escritório';
+  document.getElementById('nome').placeholder =
+    pf ? 'Ex.: Maria da Silva' : 'Ex.: Silva & Associados Advocacia';
+}
+
+function mascararDocumento(campo, tamanho, formatar) {
+  campo.addEventListener('input', () => {
+    campo.value = formatar(campo.value.replace(/\D/g, '').slice(0, tamanho));
+  });
+}
+
+mascararDocumento(document.getElementById('cpf'), 11, d =>
+  d.replace(/^(\d{3})(\d)/, '$1.$2')
+   .replace(/^(\d{3})\.(\d{3})(\d)/, '$1.$2.$3')
+   .replace(/\.(\d{3})(\d)/, '.$1-$2'));
+
+mascararDocumento(document.getElementById('cnpj'), 14, d =>
+  d.replace(/^(\d{2})(\d)/, '$1.$2')
+   .replace(/^(\d{2})\.(\d{3})(\d)/, '$1.$2.$3')
+   .replace(/\.(\d{3})(\d)/, '.$1/$2')
+   .replace(/(\d{4})(\d)/, '$1-$2'));
+
+document.querySelectorAll('input[name="tipoPessoa"]').forEach(radio => {
+  radio.addEventListener('change', aplicarTipoPessoa);
+});
+aplicarTipoPessoa();
+
 document.getElementById('formCadastro').addEventListener('submit', async (event) => {
 
   event.preventDefault();
@@ -219,8 +301,10 @@ document.getElementById('formCadastro').addEventListener('submit', async (event)
         method: 'POST',
         auth: false,
         body: {
+          tipo_pessoa: tipoPessoaSelecionado(),
           nome: document.getElementById('nome').value.trim(),
-          cnpj: document.getElementById('cnpj').value.trim(),
+          cpf: tipoPessoaSelecionado() === 'PF' ? document.getElementById('cpf').value.trim() : '',
+          cnpj: tipoPessoaSelecionado() === 'PJ' ? document.getElementById('cnpj').value.trim() : '',
           email: document.getElementById('email').value.trim(),
           senha: document.getElementById('senha').value,
           plano: document.getElementById('plano').value

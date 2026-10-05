@@ -216,6 +216,11 @@ PLANOS_LEGADOS = {
 }
 
 
+# Planos que exigem cadastro empresarial (CNPJ). Pessoa Física só contrata
+# o plano "profissional".
+PLANOS_EMPRESARIAIS = {'escritorio', 'blindagem', 'corporativo'}
+
+
 PLANO_INATIVO = {
     'nome': 'Plano Inativo',
     'preco_mensal': None,
@@ -440,10 +445,15 @@ class Escritorio(db.Model):
         db.Index('ix_escritorios_email_confirmacao_token', 'email_confirmacao_token_hash'),
         db.Index('ux_escritorios_stripe_customer', 'stripe_customer_id', unique=True),
         db.Index('ux_escritorios_stripe_subscription', 'stripe_subscription_id', unique=True),
+        db.Index('ix_escritorios_cpf', 'cpf'),
     )
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(200), nullable=False)
     cnpj = db.Column(db.String(20))
+    # 'PF' (advogado autônomo, CPF) ou 'PJ' (escritório, CNPJ). Registros
+    # antigos ficam com NULL e continuam sendo tratados como PJ.
+    tipo_pessoa = db.Column(db.String(2))
+    cpf = db.Column(db.String(11))  # somente dígitos
     email = db.Column(db.String(200), unique=True, nullable=False)
     senha_hash = db.Column(db.String(200), nullable=False)
     plano = db.Column(db.String(20), default='trial')  # trial | pro | enterprise
@@ -490,8 +500,16 @@ class Escritorio(db.Model):
         # automático. Quando houver data, ela precisa estar no futuro.
         return self.plano_expira is None or self.plano_expira > agora_utc()
 
+    def eh_pessoa_fisica(self):
+        return (self.tipo_pessoa or '').strip().upper() == 'PF'
+
     def config_plano(self):
-        return obter_config_plano(self.plano)
+        codigo, config = obter_config_plano(self.plano)
+        # Conta PF nunca é tratada como plano empresarial, mesmo que o plano
+        # salvo tenha sido alterado externamente (Stripe, Hotmart ou admin).
+        if self.eh_pessoa_fisica() and codigo in PLANOS_EMPRESARIAIS:
+            return 'profissional', PLANOS_ADVOGO_SEGURO['profissional']
+        return codigo, config
 
     def limite_advogados(self):
         _, config = self.config_plano()
@@ -726,6 +744,8 @@ def _garantir_colunas_novas():
         ('escritorios', 'stripe_checkout_session_id', 'VARCHAR(120)'),
         ('escritorios', 'trial_utilizado_em', 'TIMESTAMP'),
         ('escritorios', 'taxa_implantacao_paga_em', 'TIMESTAMP'),
+        ('escritorios', 'tipo_pessoa', 'VARCHAR(2)'),
+        ('escritorios', 'cpf', 'VARCHAR(11)'),
     ]
     for tabela, coluna, definicao_sql in colunas_necessarias:
         if not inspetor.has_table(tabela):
@@ -744,6 +764,7 @@ def _garantir_indices_banco():
     indices = [
         ('escritorios', 'ix_escritorios_reset_token', 'reset_token'),
         ('escritorios', 'ix_escritorios_email_confirmacao_token', 'email_confirmacao_token_hash'),
+        ('escritorios', 'ix_escritorios_cpf', 'cpf'),
         ('advogados', 'ix_advogados_escritorio_ativo', 'escritorio_id, ativo'),
         ('advogados', 'ix_advogados_escritorio_oab', 'escritorio_id, oab'),
         ('clientes', 'ix_clientes_reset_token', 'reset_token'),
@@ -1323,11 +1344,38 @@ def _gerar_codigo_confirmacao():
     return f'{secrets.randbelow(1_000_000):06d}'
 
 
-def _cnpj_ja_cadastrado(cnpj_normalizado):
-    if not cnpj_normalizado:
+def _cpf_valido(cpf):
+    """Valida CPF (somente dígitos) pelos dígitos verificadores."""
+    if len(cpf) != 11 or not cpf.isdigit() or cpf == cpf[0] * 11:
         return False
-    for escritorio in Escritorio.query.filter(Escritorio.cnpj.isnot(None)).all():
-        if _somente_digitos(escritorio.cnpj) == cnpj_normalizado:
+    for tamanho in (9, 10):
+        soma = sum(int(cpf[i]) * (tamanho + 1 - i) for i in range(tamanho))
+        digito = (soma * 10) % 11 % 10
+        if digito != int(cpf[tamanho]):
+            return False
+    return True
+
+
+def _cnpj_valido(cnpj):
+    """Valida CNPJ (somente dígitos) pelos dígitos verificadores."""
+    if len(cnpj) != 14 or not cnpj.isdigit() or cnpj == cnpj[0] * 14:
+        return False
+    pesos = [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
+    for tamanho in (12, 13):
+        soma = sum(int(cnpj[i]) * pesos[i + 13 - tamanho] for i in range(tamanho))
+        resto = soma % 11
+        digito = 0 if resto < 2 else 11 - resto
+        if digito != int(cnpj[tamanho]):
+            return False
+    return True
+
+
+def _documento_ja_cadastrado(documento, campo='cnpj'):
+    if not documento:
+        return False
+    coluna = getattr(Escritorio, campo)
+    for escritorio in Escritorio.query.filter(coluna.isnot(None)).all():
+        if _somente_digitos(getattr(escritorio, campo)) == documento:
             if (
                 not escritorio.email_confirmacao_obrigatoria
                 or escritorio.email_confirmado_em
@@ -1338,9 +1386,9 @@ def _cnpj_ja_cadastrado(cnpj_normalizado):
     return False
 
 
-def _outro_escritorio_ja_usou_beneficio(cnpj_normalizado, escritorio_id):
+def _outro_escritorio_ja_usou_beneficio(documento, escritorio_id, campo='cnpj'):
     for escritorio in Escritorio.query.filter(Escritorio.id != escritorio_id).all():
-        if _somente_digitos(escritorio.cnpj) != cnpj_normalizado:
+        if _somente_digitos(getattr(escritorio, campo)) != documento:
             continue
         if (
             escritorio.trial_utilizado_em
@@ -1358,7 +1406,9 @@ def _registrar_escritorio_comercial(data):
     nome = (data.get('nome') or '').strip()
     email = (data.get('email') or '').strip().lower()
     senha = data.get('senha') or ''
+    tipo_pessoa = str(data.get('tipo_pessoa') or 'PJ').strip().upper()
     cnpj = _somente_digitos(data.get('cnpj'))
+    cpf = _somente_digitos(data.get('cpf'))
     plano = normalizar_codigo_plano(data.get('plano'))
 
     permitido, espera = verificar_limite_acao(
@@ -1373,20 +1423,38 @@ def _registrar_escritorio_comercial(data):
         return jsonify({
             'erro': f'Preencha nome, e-mail e senha (mín. {SENHA_MIN_CARACTERES} caracteres).'
         }), 400
-    if len(cnpj) != 14:
-        return jsonify({'erro': 'Informe um CNPJ válido com 14 dígitos.'}), 400
+    if tipo_pessoa not in {'PF', 'PJ'}:
+        return jsonify({'erro': 'Informe se o cadastro é de Pessoa Física ou Pessoa Jurídica.'}), 400
+    if tipo_pessoa == 'PF':
+        if not _cpf_valido(cpf):
+            return jsonify({'erro': 'Informe um CPF válido.'}), 400
+        cnpj = None
+    else:
+        if len(cnpj) != 14:
+            return jsonify({'erro': 'Informe um CNPJ válido com 14 dígitos.'}), 400
+        if not _cnpj_valido(cnpj):
+            return jsonify({'erro': 'CNPJ inválido. Confira os dígitos informados.'}), 400
+        cpf = None
     if plano not in {'profissional', 'escritorio', 'blindagem'}:
         return jsonify({'erro': 'Escolha um plano disponível para contratação online.'}), 400
+    if tipo_pessoa == 'PF' and plano != 'profissional':
+        return jsonify({
+            'erro': 'Pessoa Física pode contratar somente o plano Proteção Profissional.'
+        }), 400
     if Escritorio.query.filter_by(email=email).first():
         return jsonify({'erro': 'E-mail já cadastrado.'}), 409
-    if _cnpj_ja_cadastrado(cnpj):
+    if tipo_pessoa == 'PF' and _documento_ja_cadastrado(cpf, campo='cpf'):
+        return jsonify({'erro': 'Este CPF já possui cadastro no ADVOGO SEGURO.'}), 409
+    if tipo_pessoa == 'PJ' and _documento_ja_cadastrado(cnpj):
         return jsonify({'erro': 'Este CNPJ já possui cadastro no ADVOGO SEGURO.'}), 409
 
     codigo = _gerar_codigo_confirmacao()
     escritorio = Escritorio(
         nome=nome,
         email=email,
+        tipo_pessoa=tipo_pessoa,
         cnpj=cnpj,
+        cpf=cpf,
         senha_hash=hash_senha(senha),
         plano='trial',
         plano_expira=agora_utc(),
@@ -1411,6 +1479,7 @@ def _registrar_escritorio_comercial(data):
         'ok': True,
         'email': email,
         'plano': plano,
+        'tipo_pessoa': tipo_pessoa,
         'confirmacao_email': True,
         'email_enviado': email_enviado,
         'mensagem': (
@@ -2671,7 +2740,9 @@ def escritorio_privacidade_exportar():
         'gerado_em': agora_utc().isoformat(),
         'conta': {
             'nome': escritorio.nome,
+            'tipo_pessoa': 'PF' if escritorio.eh_pessoa_fisica() else 'PJ',
             'cnpj': escritorio.cnpj,
+            'cpf': escritorio.cpf,
             'email': escritorio.email,
             'plano': escritorio.plano,
             'plano_expira': escritorio.plano_expira.isoformat() if escritorio.plano_expira else None,
@@ -3716,6 +3787,14 @@ def _sincronizar_assinatura_stripe(assinatura):
 
     if plano not in {'profissional', 'escritorio', 'blindagem'}:
         raise ValueError('Plano Stripe ausente ou inválido na assinatura.')
+    if escritorio.eh_pessoa_fisica() and plano != 'profissional':
+        # Não recusa o evento (o Stripe reenviaria indefinidamente); apenas
+        # impede que a conta PF seja tratada como plano empresarial.
+        app.logger.warning(
+            'Conta PF escritorio_id=%s recebeu plano %s pelo Stripe; mantido Proteção Profissional.',
+            escritorio.id, plano,
+        )
+        plano = 'profissional'
     if assinatura_id:
         escritorio.stripe_subscription_id = assinatura_id
     if customer_id:
@@ -3763,9 +3842,20 @@ def criar_checkout_stripe():
         return jsonify({'erro': 'Plano indisponível para contratação online.'}), 400
     if request.escritorio.assinatura_status in {'trialing', 'active'}:
         return jsonify({'erro': 'Este escritório já possui uma assinatura em andamento.'}), 409
-    cnpj = _somente_digitos(request.escritorio.cnpj)
-    if len(cnpj) != 14 or _outro_escritorio_ja_usou_beneficio(cnpj, request.escritorio.id):
-        return jsonify({'erro': 'Este CNPJ já está vinculado a outro cadastro ou assinatura.'}), 409
+    if request.escritorio.eh_pessoa_fisica():
+        if plano != 'profissional':
+            return jsonify({
+                'erro': 'Pessoa Física pode contratar somente o plano Proteção Profissional.'
+            }), 400
+        cpf = _somente_digitos(request.escritorio.cpf)
+        if not _cpf_valido(cpf) or _outro_escritorio_ja_usou_beneficio(
+            cpf, request.escritorio.id, campo='cpf'
+        ):
+            return jsonify({'erro': 'Este CPF já está vinculado a outro cadastro ou assinatura.'}), 409
+    else:
+        cnpj = _somente_digitos(request.escritorio.cnpj)
+        if len(cnpj) != 14 or _outro_escritorio_ja_usou_beneficio(cnpj, request.escritorio.id):
+            return jsonify({'erro': 'Este CNPJ já está vinculado a outro cadastro ou assinatura.'}), 409
     precos = STRIPE_PRICE_MAP.get(plano)
     if not precos:
         return jsonify({'erro': 'Preço do plano ainda não configurado.'}), 503

@@ -4,7 +4,7 @@
 
 | Operação | Categorias | Finalidade | Titulares | Retenção |
 |---|---|---|---|---|
-| Conta do escritório | nome, CNPJ, e-mail, autenticação | prestação do serviço e segurança | usuários do escritório | conforme contrato/obrigações |
+| Conta do escritório | nome, CNPJ (PJ) ou CPF (advogado PF), e-mail, autenticação | prestação do serviço e segurança | usuários do escritório | conforme contrato/obrigações |
 | Advogados | nome, OAB, telefone, foto | identificação e prevenção a fraudes | advogados | enquanto necessário |
 | Clientes/processos | nome, telefone, e-mail, dados do caso | verificação e proteção antifraude | clientes | conforme finalidade/obrigações |
 | Verificações/CCA | número consultado, resultado, eventos | segurança e auditoria | clientes | política configurada |
