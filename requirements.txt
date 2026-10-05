@@ -8,3 +8,4 @@ psycopg[binary]==3.2.10
 python-dotenv==1.0.1
 reportlab==4.2.5
 stripe==15.5.0
+tzdata==2026.4

@@ -20,7 +20,7 @@
       Validando o pagamento e ativando sua assinatura...
     </div>
 
-    <p style="color:var(--texto-suave);line-height:1.7;">
+    <p id="avisoPendente" style="color:var(--texto-suave);line-height:1.7;">
       A assinatura será liberada após a confirmação segura do pagamento pelo provedor.
     </p>
 
@@ -42,6 +42,9 @@
 Auth.requireTipo('escritorio', '/escritorio/login');
 
 const sessionId = new URLSearchParams(window.location.search).get('session_id');
+
+// Status Stripe em que o acesso ao plano já está liberado.
+const STATUS_ASSINATURA_LIBERADA = ['active', 'trialing'];
 
 async function sincronizar() {
 
@@ -66,13 +69,16 @@ async function sincronizar() {
       }
     );
 
-    if (data.ok) {
+    if (data.ok && STATUS_ASSINATURA_LIBERADA.includes(data.assinatura_status)) {
 
       showAlert(
         'alertaSucesso',
-        'Pagamento confirmado. Sua assinatura está ativa.',
+        'Pagamento confirmado. Sua assinatura está ativa e o acesso ao plano já foi liberado.',
         'sucesso'
       );
+
+      // Com o plano já ativo, o aviso de liberação futura seria contraditório.
+      document.getElementById('avisoPendente').hidden = true;
 
       Auth.setSession(
         null,
@@ -85,6 +91,7 @@ async function sincronizar() {
 
     } else {
 
+      // Pagamento ainda pendente de confirmação: mantém o aviso de liberação.
       showAlert(
         'alertaSucesso',
         data.erro || 'A ativação da assinatura ainda está sendo processada.',

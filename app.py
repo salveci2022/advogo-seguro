@@ -20,6 +20,7 @@ import ssl
 import sqlite3
 from email.message import EmailMessage
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from functools import wraps
 
 from flask import Flask, request, jsonify, render_template, Response
@@ -3461,9 +3462,19 @@ _ESTILO_NORMAL = ParagraphStyle('NormalAdvogo', parent=_ESTILOS_PDF['Normal'], f
 _ESTILO_RODAPE = ParagraphStyle('RodapeAdvogo', parent=_ESTILOS_PDF['Normal'], fontSize=8, textColor=colors.HexColor('#8a93a6'), alignment=TA_CENTER)
 
 
+FUSO_BRASILIA = ZoneInfo('America/Sao_Paulo')
+
+
+def _data_brasilia_pdf(valor, formato='%d/%m/%Y %H:%M'):
+    """Formata datas UTC do banco (sem tzinfo) no horário de Brasília para os PDFs."""
+    if valor.tzinfo is None:
+        valor = valor.replace(tzinfo=timezone.utc)
+    return valor.astimezone(FUSO_BRASILIA).strftime(formato)
+
+
 def _cabecalho_pdf(story, subtitulo_relatorio):
     story.append(Paragraph('ADVOGO SEGURO', _ESTILO_TITULO))
-    story.append(Paragraph('SISTEMA ANTI-GOLPE DO FALSO ADVOGADO', _ESTILO_SUBTITULO))
+    story.append(Paragraph('SEGURANÇA E VALIDAÇÃO DA COMUNICAÇÃO JURÍDICA', _ESTILO_SUBTITULO))
     story.append(HRFlowable(width='100%', color=colors.HexColor('#b9923f'), thickness=1.2))
     story.append(Spacer(1, 8))
     story.append(Paragraph(subtitulo_relatorio, _ESTILO_SECAO))
@@ -3474,7 +3485,7 @@ def _rodape_pdf(story):
     story.append(HRFlowable(width='100%', color=colors.HexColor('#e1e6ef'), thickness=0.6))
     story.append(Spacer(1, 4))
     story.append(Paragraph(
-        f'Documento gerado em {agora_utc().strftime("%d/%m/%Y %H:%M")} (UTC) — '
+        f'Documento gerado em {_data_brasilia_pdf(agora_utc())} — horário de Brasília — '
         f'ADVOGO SEGURO &mdash; SPYNET Tecnologia Forense &amp; Soluções Digitais Ltda.',
         _ESTILO_RODAPE
     ))
@@ -3528,10 +3539,10 @@ def relatorio_contato_seguro_pdf(contato_id):
         ('Processo', contato.processo.codigo_unico if contato.processo else '—'),
         ('Canal', LABEL_CANAL.get(contato.canal, contato.canal)),
         ('Status', contato.status_atual().upper()),
-        ('Criado em', contato.criado_em.strftime('%d/%m/%Y %H:%M:%S')),
-        ('Expira em', contato.expira_em.strftime('%d/%m/%Y %H:%M:%S')),
-        ('Usado em', contato.usado_em.strftime('%d/%m/%Y %H:%M:%S') if contato.usado_em else '—'),
-        ('Cancelado em', contato.cancelado_em.strftime('%d/%m/%Y %H:%M:%S') if contato.cancelado_em else '—'),
+        ('Criado em', _data_brasilia_pdf(contato.criado_em, '%d/%m/%Y %H:%M:%S')),
+        ('Expira em', _data_brasilia_pdf(contato.expira_em, '%d/%m/%Y %H:%M:%S')),
+        ('Usado em', _data_brasilia_pdf(contato.usado_em, '%d/%m/%Y %H:%M:%S') if contato.usado_em else '—'),
+        ('Cancelado em', _data_brasilia_pdf(contato.cancelado_em, '%d/%m/%Y %H:%M:%S') if contato.cancelado_em else '—'),
         ('Observação', contato.observacao or '—'),
     ]))
     _rodape_pdf(story)
@@ -3562,7 +3573,7 @@ def relatorio_tentativa_pdf(tentativa_id):
         ('Canal', LABEL_CANAL.get(tentativa.canal, tentativa.canal)),
         ('Número suspeito', tentativa.numero_suspeito or '—'),
         ('Resultado', 'GOLPE CONFIRMADO' if tentativa.confirmado_golpe else 'Em análise'),
-        ('Data/hora', tentativa.criado_em.strftime('%d/%m/%Y %H:%M:%S')),
+        ('Data/hora', _data_brasilia_pdf(tentativa.criado_em, '%d/%m/%Y %H:%M:%S')),
         ('Descrição/observações', tentativa.descricao or '—'),
     ]))
     _rodape_pdf(story)
@@ -3612,7 +3623,7 @@ def relatorio_mensal_pdf():
         linhas = [['Data', 'Cliente', 'Canal', 'Confirmado golpe?']]
         for t in tentativas:
             linhas.append([
-                t.criado_em.strftime('%d/%m %H:%M'),
+                _data_brasilia_pdf(t.criado_em, '%d/%m %H:%M'),
                 t.processo.cliente.nome if t.processo and t.processo.cliente else '—',
                 LABEL_CANAL.get(t.canal, t.canal or '—'),
                 'Sim' if t.confirmado_golpe else 'Não'
@@ -3657,7 +3668,7 @@ def relatorio_processo_pdf(processo_id):
         ('Nº do processo', processo.numero_processo or '—'),
         ('Status do processo', processo.status.upper()),
         ('Descrição', processo.descricao or '—'),
-        ('Criado em', processo.criado_em.strftime('%d/%m/%Y')),
+        ('Criado em', _data_brasilia_pdf(processo.criado_em, '%d/%m/%Y')),
         ('Total de Contatos Seguros (CCA)', len(ccas)),
         ('Total de tentativas suspeitas', len(tentativas)),
     ]))
@@ -3667,7 +3678,7 @@ def relatorio_processo_pdf(processo_id):
         story.append(Paragraph('Histórico de Contatos Seguros (CCA)', _ESTILO_SECAO))
         linhas = [['Código', 'Canal', 'Status', 'Criado em']]
         for cca in ccas:
-            linhas.append([cca.codigo_cca, LABEL_CANAL.get(cca.canal, cca.canal), cca.status_atual().upper(), cca.criado_em.strftime('%d/%m %H:%M')])
+            linhas.append([cca.codigo_cca, LABEL_CANAL.get(cca.canal, cca.canal), cca.status_atual().upper(), _data_brasilia_pdf(cca.criado_em, '%d/%m %H:%M')])
         tabela = Table(linhas, colWidths=[35 * mm, 35 * mm, 35 * mm, 45 * mm])
         tabela.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0a1f3d')),
@@ -3686,7 +3697,7 @@ def relatorio_processo_pdf(processo_id):
         linhas = [['Data', 'Canal', 'Número suspeito', 'Golpe confirmado?']]
         for t in tentativas:
             linhas.append([
-                t.criado_em.strftime('%d/%m %H:%M'),
+                _data_brasilia_pdf(t.criado_em, '%d/%m %H:%M'),
                 LABEL_CANAL.get(t.canal, t.canal or '—'),
                 t.numero_suspeito or '—',
                 'Sim' if t.confirmado_golpe else 'Não'
