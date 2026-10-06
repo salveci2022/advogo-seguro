@@ -56,19 +56,86 @@
   text-align: left;
 }
 
-@media (max-width: 900px) {
+/* Tablet/celular: uma coluna, área azul vira cabeçalho compacto */
+@media (max-width: 899px) {
+  .auth-wrap {
+    flex-direction: column;
+    overflow-x: hidden;
+  }
+
   .auth-side {
-    min-height: 460px;
-    padding: 42px 24px !important;
+    flex: 0 0 auto;
+    min-height: 0;
+    padding: 22px 16px 20px !important;
   }
 
   .auth-side .login-main-brand {
-    font-size: clamp(2rem, 8vw, 3rem);
+    flex-direction: row;
+    gap: 10px;
+    margin: 0 0 8px;
+    font-size: clamp(1.25rem, 5.5vw, 1.6rem);
+    letter-spacing: 0.5px;
   }
 
   .auth-side .login-main-brand img {
-    width: 74px;
-    height: 74px;
+    width: 40px;
+    height: 40px;
+  }
+
+  .auth-side h2 {
+    margin: 0 0 6px;
+    font-size: clamp(1.05rem, 4.4vw, 1.3rem);
+  }
+
+  .auth-side > p {
+    max-width: 520px;
+    margin: 0 auto;
+    font-size: 0.88rem;
+    line-height: 1.5;
+  }
+
+  .auth-side .trust-list {
+    display: none;
+  }
+
+  .auth-form-col {
+    flex: 1 0 auto;
+    align-items: flex-start;
+    padding: 24px 16px 28px;
+  }
+
+  .auth-card {
+    max-width: 440px;
+    margin: 0 auto;
+    overflow-wrap: anywhere;
+  }
+
+  .auth-card .form-control {
+    font-size: 16px; /* evita zoom automático do iOS ao focar */
+    min-height: 46px;
+  }
+
+  #btnEntrar {
+    min-height: 48px;
+    font-size: 1rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .auth-side > p {
+    display: none;
+  }
+
+  .auth-form-col {
+    padding: 18px 12px 24px;
+  }
+
+  .auth-card {
+    padding: 26px 18px;
+  }
+
+  .auth-card .sub {
+    margin-bottom: 20px;
   }
 }
 </style>
