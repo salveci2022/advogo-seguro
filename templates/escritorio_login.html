@@ -60,7 +60,8 @@
 @media (max-width: 899px) {
   .auth-wrap {
     flex-direction: column;
-    overflow-x: hidden;
+    min-height: 0; /* sem 100vh: "Aviso de Privacidade" fica logo abaixo do card */
+    overflow-x: clip;
   }
 
   .auth-side {
@@ -101,7 +102,7 @@
   .auth-form-col {
     flex: 1 0 auto;
     align-items: flex-start;
-    padding: 24px 16px 28px;
+    padding: 20px 16px 16px;
   }
 
   .auth-card {
@@ -127,7 +128,7 @@
   }
 
   .auth-form-col {
-    padding: 18px 12px 24px;
+    padding: 16px 12px 14px;
   }
 
   .auth-card {
@@ -136,6 +137,28 @@
 
   .auth-card .sub {
     margin-bottom: 20px;
+  }
+}
+
+/* Telas muito pequenas (~320px): cabeçalho azul um pouco menor */
+@media (max-width: 360px) {
+  .auth-side {
+    padding: 16px 12px 14px !important;
+  }
+
+  .auth-side .login-main-brand {
+    gap: 8px;
+    margin-bottom: 6px;
+    font-size: 1.1rem;
+  }
+
+  .auth-side .login-main-brand img {
+    width: 32px;
+    height: 32px;
+  }
+
+  .auth-side h2 {
+    font-size: 0.98rem;
   }
 }
 </style>
