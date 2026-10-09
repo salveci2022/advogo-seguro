@@ -102,6 +102,26 @@
   </div>
 </div>
 
+<!-- Modal novo acesso (link de redefinição de senha) -->
+<div class="modal-overlay" id="modalNovoAcessoCliente">
+  <div class="modal-box">
+    <h3>🔑 Gerar novo acesso</h3>
+    <div id="alertaNovoAcessoCliente" class="alert-box"></div>
+    <div id="conteudoNovoAcessoCliente" style="display:none;">
+      <div class="alert-box show alert-sucesso" role="status">Novo link de acesso gerado com segurança</div>
+      <p style="color:var(--texto-suave); font-size:0.9rem;" id="clienteNovoAcessoNome"></p>
+      <div class="form-group">
+        <input type="text" class="form-control" id="linkNovoAcessoCliente" readonly>
+      </div>
+      <p style="color:var(--texto-suave); font-size:0.9rem;">Envie este link ao cliente por um canal confiável. O link é de uso único e expira em pouco tempo.</p>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn-spy btn-spy-ghost btn-spy-block" onclick="fecharModalNovoAcessoCliente()">Fechar</button>
+      <button type="button" class="btn-spy btn-spy-primary btn-spy-block" id="btnCopiarNovoAcessoCliente" onclick="copiarLinkNovoAcessoCliente()" disabled>Copiar link</button>
+    </div>
+  </div>
+</div>
+
 <script src="{{ url_for('static', filename='js/api.js') }}"></script>
 <script>
 Auth.requireTipo('escritorio', '/escritorio/login');
@@ -140,6 +160,7 @@ async function carregarClientes() {
         <td>${badgeAtivoCliente(c.ativo)}</td>
         <td style="white-space:nowrap;">
           <button class="btn-spy btn-spy-ghost" style="padding:6px 10px; font-size:0.8rem;" onclick="abrirModalEditarCliente(${c.id})">✏️ Editar</button>
+          <button class="btn-spy btn-spy-ghost" style="padding:6px 10px; font-size:0.8rem;" onclick="gerarNovoAcessoCliente(${c.id})">🔑 Gerar novo acesso</button>
           ${c.ativo
             ? `<button class="btn-spy btn-spy-ghost" style="padding:6px 10px; font-size:0.8rem;" onclick="abrirModalDesativarCliente(${c.id}, true)">🚫 Desativar</button>`
             : `<button class="btn-spy btn-spy-ghost" style="padding:6px 10px; font-size:0.8rem;" onclick="abrirModalDesativarCliente(${c.id}, false)">✅ Reativar</button>`}
@@ -259,6 +280,48 @@ document.getElementById('btnConfirmarExcluirCliente').addEventListener('click', 
     setLoading(btn, false, 'Excluir definitivamente');
   }
 });
+
+async function gerarNovoAcessoCliente(id) {
+  hideAlert('alertaNovoAcessoCliente');
+  const campo = document.getElementById('linkNovoAcessoCliente');
+  const btnCopiar = document.getElementById('btnCopiarNovoAcessoCliente');
+  campo.value = '';
+  btnCopiar.disabled = true;
+  document.getElementById('conteudoNovoAcessoCliente').style.display = 'none';
+  document.getElementById('modalNovoAcessoCliente').classList.add('show');
+  btnCopiar.textContent = 'Gerando link...';
+  try {
+    // Reutiliza a rota existente: valida o vínculo com o escritório e bloqueia clientes compartilhados.
+    const data = await apiRequest('/api/escritorio/cliente/' + id + '/link-reset', { method: 'POST' });
+    campo.value = window.location.origin + data.link;
+    document.getElementById('clienteNovoAcessoNome').textContent = data.cliente_nome ? 'Cliente: ' + data.cliente_nome : '';
+    document.getElementById('conteudoNovoAcessoCliente').style.display = '';
+    btnCopiar.disabled = false;
+  } catch (err) {
+    showAlert('alertaNovoAcessoCliente', err.message, 'erro');
+  } finally {
+    btnCopiar.textContent = 'Copiar link';
+  }
+}
+
+async function copiarLinkNovoAcessoCliente() {
+  const campo = document.getElementById('linkNovoAcessoCliente');
+  const btn = document.getElementById('btnCopiarNovoAcessoCliente');
+  if (!campo.value) return;
+  try {
+    await navigator.clipboard.writeText(campo.value);
+  } catch (e) {
+    campo.select();
+    document.execCommand('copy');
+  }
+  btn.textContent = 'Link copiado ✓';
+}
+
+function fecharModalNovoAcessoCliente() {
+  // Não mantém o link sensível na tela depois de fechar o modal.
+  document.getElementById('linkNovoAcessoCliente').value = '';
+  document.getElementById('modalNovoAcessoCliente').classList.remove('show');
+}
 
 carregarClientes();
 </script>
