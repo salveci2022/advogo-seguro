@@ -155,8 +155,16 @@ async function carregarPlanoAdvogados() {
       }
     }
 
-    resumo.innerHTML = `<strong>${escapeHtml(plano.nome)}</strong> — ${limiteTexto}` +
-      (plano.plano_ativo ? '' : ' • <span class="text-danger-strong">plano inativo</span>');
+    resumo.replaceChildren();
+    const planoForte = document.createElement('strong');
+    planoForte.textContent = plano.nome || '';
+    resumo.append(planoForte, document.createTextNode(' — ' + limiteTexto));
+    if (!plano.plano_ativo) {
+      const inativo = document.createElement('span');
+      inativo.className = 'text-danger-strong';
+      inativo.textContent = 'plano inativo';
+      resumo.append(document.createTextNode(' • '), inativo);
+    }
 
     if (plano.pode_adicionar_advogado) {
       hideAlert('alertaAdvogados');
@@ -205,25 +213,59 @@ function abrirModalEditar(adv) {
   document.getElementById('modalAdvogado').classList.add('show');
 }
 
-function atualizarPreviaFoto() {
-  const url = document.getElementById('advFoto').value.trim();
-  const img = document.getElementById('previaFoto');
-  if (url) {
-    img.src = url;
-    img.style.display = 'block';
-  } else {
-    img.style.display = 'none';
+function urlFotoSegura(valor) {
+  if (typeof valor !== 'string' || !valor.trim()) return null;
+  try {
+    const url = new URL(valor.trim(), window.location.origin);
+    if (!['https:', 'http:'].includes(url.protocol)) return null;
+    // Fora do ambiente local, evita usar HTTP para fotos remotas.
+    if (window.location.protocol === 'https:' && url.protocol !== 'https:') return null;
+    return url.href;
+  } catch (_) {
+    return null;
   }
+}
+
+const TIPOS_FOTO = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const TAMANHO_MAX_FOTO = 3 * 1024 * 1024;
+
+function validarArquivoFoto(arquivo) {
+  return !!arquivo && TIPOS_FOTO.has(arquivo.type) && arquivo.size > 0 && arquivo.size <= TAMANHO_MAX_FOTO;
+}
+
+function atualizarPreviaFoto() {
+  const valor = document.getElementById('advFoto').value.trim();
+  const img = document.getElementById('previaFoto');
+  const url = urlFotoSegura(valor);
+  if (!url) {
+    img.removeAttribute('src');
+    img.style.display = 'none';
+    return;
+  }
+  img.src = url;
+  img.style.display = 'block';
 }
 
 let previaArquivoUrl = null;
 
 function previaArquivoSelecionado() {
-  const arquivo = document.getElementById('advFotoArquivo').files[0];
-  if (!arquivo) return;
-  if (previaArquivoUrl) URL.revokeObjectURL(previaArquivoUrl);
-  previaArquivoUrl = URL.createObjectURL(arquivo);
+  const input = document.getElementById('advFotoArquivo');
+  const arquivo = input.files[0];
+  if (previaArquivoUrl) {
+    URL.revokeObjectURL(previaArquivoUrl);
+    previaArquivoUrl = null;
+  }
   const img = document.getElementById('previaFoto');
+  img.removeAttribute('src');
+  img.style.display = 'none';
+  if (!arquivo) return;
+  if (!validarArquivoFoto(arquivo)) {
+    input.value = '';
+    showAlert('alertaModal', 'Selecione uma imagem JPEG, PNG ou WebP de até 3 MB.', 'erro');
+    return;
+  }
+  hideAlert('alertaModal');
+  previaArquivoUrl = URL.createObjectURL(arquivo);
   img.src = previaArquivoUrl;
   img.style.display = 'block';
 }
@@ -275,11 +317,19 @@ async function abrirModalExcluir(id) {
   document.getElementById('modalExcluirAdvogado').classList.add('show');
   try {
     const resumo = await apiRequest('/api/escritorio/advogados/' + id + '/resumo-exclusao');
-    document.getElementById('resumoExclusaoAdvogado').innerHTML = `
-      <li><b>${resumo.processos}</b> processo(s)</li>
-      <li><b>${resumo.tentativas_suspeitas}</b> tentativa(s) suspeita(s)</li>
-      <li><b>${resumo.contatos_seguros}</b> contato(s) seguro(s) (CCA)</li>
-    `;
+    const listaResumo = document.getElementById('resumoExclusaoAdvogado');
+    listaResumo.replaceChildren();
+    for (const [quantidade, descricao] of [
+      [resumo.processos, ' processo(s)'],
+      [resumo.tentativas_suspeitas, ' tentativa(s) suspeita(s)'],
+      [resumo.contatos_seguros, ' contato(s) seguro(s) (CCA)']
+    ]) {
+      const item = document.createElement('li');
+      const numero = document.createElement('b');
+      numero.textContent = String(quantidade ?? 0);
+      item.append(numero, document.createTextNode(descricao));
+      listaResumo.appendChild(item);
+    }
   } catch (err) {
     document.getElementById('resumoExclusaoAdvogado').innerHTML = '';
     showAlert('alertaExcluir', err.message, 'erro');
@@ -317,46 +367,82 @@ document.getElementById('btnConfirmarDesativarAdvogado').addEventListener('click
 
 let listaAdvogadosCache = [];
 
-function badgeAtivoAdvogado(ativo) {
-  return ativo
-    ? '<span class="badge-pill badge-verde">Ativo</span>'
-    : '<span class="badge-pill badge-cinza">Inativo</span>';
+function criarCelula(linha, texto, negrito = false) {
+  const celula = document.createElement('td');
+  if (negrito) {
+    const strong = document.createElement('strong');
+    strong.textContent = String(texto ?? '');
+    celula.appendChild(strong);
+  } else {
+    celula.textContent = String(texto ?? '');
+  }
+  linha.appendChild(celula);
+  return celula;
+}
+
+function criarBotaoAcao(celula, texto, acao, extra = '') {
+  const botao = document.createElement('button');
+  botao.type = 'button';
+  botao.className = 'btn-spy btn-spy-ghost';
+  botao.style.cssText = 'padding:6px 12px;font-size:0.82rem;' + extra;
+  botao.textContent = texto;
+  botao.addEventListener('click', acao);
+  celula.appendChild(botao);
 }
 
 async function carregarAdvogados() {
   const corpo = document.getElementById('corpoTabelaAdvogados');
   try {
     const lista = await apiRequest('/api/escritorio/advogados');
+    if (!Array.isArray(lista)) throw new Error('Resposta inválida ao carregar advogados.');
     listaAdvogadosCache = lista;
+    corpo.replaceChildren();
     if (lista.length === 0) {
-      corpo.innerHTML = '<tr><td colspan="6"><div class="empty-state"><div class="ic">⚖️</div>Nenhum advogado cadastrado ainda.</div></td></tr>';
+      const linha = document.createElement('tr');
+      const celula = criarCelula(linha, '⚖️ Nenhum advogado cadastrado ainda.');
+      celula.colSpan = 6;
+      celula.className = 'empty-state';
+      corpo.appendChild(linha);
       return;
     }
-    corpo.innerHTML = lista.map(a => `
-      <tr>
-        <td>${a.foto_url ? `<img src="${a.foto_url}" alt="" style="width:38px;height:38px;border-radius:50%;object-fit:cover;">` : '👤'}</td>
-        <td><strong>${escapeHtml(a.nome)}</strong></td>
-        <td>${a.oab ? escapeHtml(a.oab) : '<span class="badge-pill badge-cinza">Não informado</span>'}</td>
-        <td>${escapeHtml(a.telefone_oficial)}</td>
-        <td>${badgeAtivoAdvogado(a.ativo)}</td>
-        <td style="white-space:nowrap;">
-          <button class="btn-spy btn-spy-ghost" style="padding:6px 12px; font-size:0.82rem;" onclick='abrirModalEditar(${JSON.stringify(a)})'>✏️ Editar</button>
-          ${a.ativo
-            ? `<button class="btn-spy btn-spy-ghost" style="padding:6px 12px; font-size:0.82rem;" onclick="abrirModalDesativar(${a.id}, true)">🚫 Desativar</button>`
-            : `<button class="btn-spy btn-spy-ghost" style="padding:6px 12px; font-size:0.82rem;" onclick="abrirModalDesativar(${a.id}, false)">✅ Reativar</button>`}
-          <button class="btn-spy btn-spy-ghost" style="padding:6px 12px; font-size:0.82rem; color:var(--vermelho);" onclick="abrirModalExcluir(${a.id})">🗑️</button>
-        </td>
-      </tr>
-    `).join('');
+
+    for (const advogado of lista) {
+      const linha = document.createElement('tr');
+      const foto = criarCelula(linha, '');
+      const urlFoto = urlFotoSegura(advogado.foto_url);
+      if (urlFoto) {
+        const img = document.createElement('img');
+        img.src = urlFoto;
+        img.alt = '';
+        img.style.cssText = 'width:38px;height:38px;border-radius:50%;object-fit:cover;';
+        img.addEventListener('error', () => img.replaceWith(document.createTextNode('👤')), { once: true });
+        foto.appendChild(img);
+      } else {
+        foto.textContent = '👤';
+      }
+      criarCelula(linha, advogado.nome, true);
+      const oab = criarCelula(linha, advogado.oab || 'Não informado');
+      if (!advogado.oab) oab.className = 'badge-pill badge-cinza';
+      criarCelula(linha, advogado.telefone_oficial);
+      const status = criarCelula(linha, '');
+      const badge = document.createElement('span');
+      badge.className = advogado.ativo ? 'badge-pill badge-verde' : 'badge-pill badge-cinza';
+      badge.textContent = advogado.ativo ? 'Ativo' : 'Inativo';
+      status.appendChild(badge);
+      const acoes = criarCelula(linha, '');
+      acoes.style.whiteSpace = 'nowrap';
+      criarBotaoAcao(acoes, '✏️ Editar', () => abrirModalEditar(advogado));
+      criarBotaoAcao(
+        acoes,
+        advogado.ativo ? '🚫 Desativar' : '✅ Reativar',
+        () => abrirModalDesativar(advogado.id, !!advogado.ativo)
+      );
+      criarBotaoAcao(acoes, '🗑️', () => abrirModalExcluir(advogado.id), 'color:var(--vermelho);');
+      corpo.appendChild(linha);
+    }
   } catch (err) {
     showAlert('alertaAdvogados', err.message, 'erro');
   }
-}
-
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str || '';
-  return div.innerHTML;
 }
 
 document.getElementById('formAdvogado').addEventListener('submit', async (e) => {
@@ -372,11 +458,19 @@ document.getElementById('formAdvogado').addEventListener('submit', async (e) => 
   let cadastroPrincipalSalvo = false;
 
   try {
+    const fotoDigitada = document.getElementById('advFoto').value.trim();
+    if (fotoDigitada && !urlFotoSegura(fotoDigitada)) {
+      throw new Error('O link da foto deve usar HTTPS válido.');
+    }
+    const arquivoSelecionado = document.getElementById('advFotoArquivo').files[0];
+    if (arquivoSelecionado && !validarArquivoFoto(arquivoSelecionado)) {
+      throw new Error('Selecione uma imagem JPEG, PNG ou WebP de até 3 MB.');
+    }
     const corpo = {
       nome: document.getElementById('advNome').value.trim(),
       oab: document.getElementById('advOab').value.trim(),
       telefone_oficial: document.getElementById('advTelefone').value.trim(),
-      foto_url: document.getElementById('advFoto').value.trim()
+      foto_url: fotoDigitada
     };
 
     if (eraEdicao) {
