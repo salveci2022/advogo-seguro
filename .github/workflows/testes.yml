@@ -1,0 +1,42 @@
+name: Testes automatizados — ADVOGO SEGURO
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [fix/seguranca-advogados-xss]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    name: Testes Pytest (SQLite isolado)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: "sqlite:///:memory:"
+      SECRET_KEY: teste-secret-github-actions
+      JWT_SECRET: teste-jwt-github-actions
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Baixar código da branch
+        uses: actions/checkout@v4
+
+      - name: Preparar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Instalar dependências de aplicação e testes
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest
+
+      - name: Executar testes sem acesso ao banco de produção
+        run: python -m pytest -q tests/
