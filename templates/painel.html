@@ -1,118 +1,124 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/logo-icone.svg') }}">
-  <title>Contratação recebida | ADVOGO SEGURO</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/logo-icone.svg') }}">
+<title>Painel — ADVOGO SEGURO</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
-<body style="background:var(--cinza-claro);">
+<body>
 
-<main class="container-narrow" style="padding:70px 20px;max-width:720px;">
-  <div class="panel" style="text-align:center;">
+<div class="mobile-topbar">
+  <button onclick="toggleSidebar()">☰</button>
+  <div class="brand" style="font-size:1rem;"><img src="{{ url_for('static', filename='img/logo-icone.svg') }}" class="brand-logo" alt="ADVOGO SEGURO"> ADVOGO SEGURO</div>
+  <div></div>
+</div>
 
-    <div style="font-size:3rem;">🛡️</div>
+<div class="app-shell">
+  {% include '_sidebar.html' with context %}
 
-    <h1>Contratação recebida</h1>
-
-    <div id="alertaSucesso" class="alert-box show alert-sucesso">
-      Validando o pagamento e ativando sua assinatura...
+  <main class="main-content">
+    <div class="topbar">
+      <h1>Dashboard</h1>
+      <div class="user-chip">👤 <span id="nomeUsuario">—</span></div>
     </div>
 
-    <p id="avisoPendente" style="color:var(--texto-suave);line-height:1.7;">
-      A assinatura será liberada após a confirmação segura do pagamento pelo provedor.
-    </p>
+    <div id="alertaPainel" class="alert-box"></div>
 
-    <a
-      href="/escritorio/painel"
-      class="btn-spy btn-spy-primary"
-      id="btnPainel"
-      style="display:none;"
-    >
-      Acessar o painel
-    </a>
+    <div class="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-icon">⚖️</div>
+        <div class="kpi-label">Total de advogados</div>
+        <div class="kpi-value" id="kpiAdvogados">—</div>
+      </div>
+      <div class="kpi-card accent-dourado">
+        <div class="kpi-icon">📁</div>
+        <div class="kpi-label">Total de processos</div>
+        <div class="kpi-value" id="kpiProcessos">—</div>
+      </div>
+      <div class="kpi-card accent-vermelho">
+        <div class="kpi-icon">🚨</div>
+        <div class="kpi-label">Tentativas suspeitas</div>
+        <div class="kpi-value" id="kpiTentativas">—</div>
+      </div>
+      <div class="kpi-card accent-verde">
+        <div class="kpi-icon">💳</div>
+        <div class="kpi-label">Plano atual</div>
+        <div class="kpi-value" id="kpiPlano" style="font-size:1.05rem; line-height:1.25; word-break:break-word;">—</div>
+      </div>
+    </div>
 
-  </div>
-</main>
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Bem-vindo ao ADVOGO SEGURO</h2>
+      </div>
+      <p style="color:var(--texto-suave); line-height:1.6;">
+        Cadastre seus advogados na seção <strong>Advogados</strong>, vincule processos de clientes na seção <strong>Processos</strong>
+        e acompanhe tentativas de golpe registradas pelos próprios clientes na seção <strong>Tentativas Suspeitas</strong>.
+        Cada processo gera um código único que o cliente pode usar para confirmar a autenticidade de qualquer contato recebido.
+      </p>
+    </div>
+  </main>
+</div>
 
 <script src="{{ url_for('static', filename='js/api.js') }}"></script>
-
 <script>
 Auth.requireTipo('escritorio', '/escritorio/login');
+document.getElementById('nomeUsuario').textContent = Auth.getNome();
 
-const sessionId = new URLSearchParams(window.location.search).get('session_id');
-
-// Status Stripe em que o acesso ao plano já está liberado.
-const STATUS_ASSINATURA_LIBERADA = ['active', 'trialing'];
-
-async function sincronizar() {
-
-  if (!sessionId) {
-    showAlert(
-      'alertaSucesso',
-      'Sessão de pagamento não identificada.',
-      'erro'
-    );
-    return;
-  }
-
+async function carregarDashboard() {
   try {
+    const [advogados, processos, tentativas] = await Promise.all([
+      apiRequest('/api/escritorio/advogados'),
+      apiRequest('/api/escritorio/processos'),
+      apiRequest('/api/escritorio/tentativas')
+    ]);
 
-    const data = await apiRequest(
-      '/api/comercial/checkout/sincronizar',
-      {
-        method: 'POST',
-        body: {
-          session_id: sessionId
-        }
-      }
-    );
-
-    if (data.ok && STATUS_ASSINATURA_LIBERADA.includes(data.assinatura_status)) {
-
-      showAlert(
-        'alertaSucesso',
-        'Pagamento confirmado. Sua assinatura está ativa e o acesso ao plano já foi liberado.',
-        'sucesso'
-      );
-
-      // Com o plano já ativo, o aviso de liberação futura seria contraditório.
-      document.getElementById('avisoPendente').hidden = true;
-
-      Auth.setSession(
-        null,
-        'escritorio',
-        Auth.getNome(),
-        data.plano
-      );
-
-      document.getElementById('btnPainel').style.display = 'inline-flex';
-
-    } else {
-
-      // Pagamento ainda pendente de confirmação: mantém o aviso de liberação.
-      showAlert(
-        'alertaSucesso',
-        data.erro || 'A ativação da assinatura ainda está sendo processada.',
-        'sucesso'
-      );
-
-    }
-
+    document.getElementById('kpiAdvogados').textContent = advogados.length;
+    document.getElementById('kpiProcessos').textContent = processos.length;
+    document.getElementById('kpiTentativas').textContent = tentativas.length;
   } catch (err) {
-
-    showAlert(
-      'alertaSucesso',
-      err.message,
-      'erro'
-    );
-
+    showAlert('alertaPainel', err.message, 'erro');
   }
 }
 
-sincronizar();
-</script>
+function atualizarPlanoTag(plano) {
+  const tag = document.getElementById('planoTag');
+  const kpi = document.getElementById('kpiPlano');
 
+  const nomes = {
+    trial: 'ACESSO PENDENTE',
+    profissional: 'PROTEÇÃO PROFISSIONAL',
+    escritorio: 'ESCRITÓRIO PROTEGIDO',
+    blindagem: 'BLINDAGEM JURÍDICA',
+    corporativo: 'CORPORATIVO',
+
+    // Compatibilidade com os códigos antigos do sistema
+    pro: 'ESCRITÓRIO PROTEGIDO',
+    enterprise: 'CORPORATIVO',
+
+    cancelado: 'CANCELADO'
+  };
+
+  const texto = nomes[plano] || (plano ? String(plano).toUpperCase() : '—');
+
+  if (tag) {
+    tag.textContent = 'PLANO: ' + texto;
+  }
+
+  if (kpi) {
+    kpi.textContent = texto;
+    kpi.title = texto;
+  }
+}
+
+// Como não há endpoint "/me", buscamos o plano relendo o login não é ideal;
+// então usamos o plano vindo da sessão (salvo no login/cadastro), com fallback.
+const planoSalvo = Auth.getPlano();
+atualizarPlanoTag(planoSalvo);
+
+carregarDashboard();
+</script>
 </body>
 </html>
