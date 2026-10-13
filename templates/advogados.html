@@ -182,6 +182,7 @@ async function carregarPlanoAdvogados() {
 }
 
 function abrirModalNovo() {
+  ++versaoPreviaFoto;
   if (estadoPlanoAdvogados && !estadoPlanoAdvogados.pode_adicionar_advogado) {
     showAlert(
       'alertaAdvogados',
@@ -200,6 +201,7 @@ function abrirModalNovo() {
 }
 
 function abrirModalEditar(adv) {
+  ++versaoPreviaFoto;
   advogadoEditandoId = adv.id;
   hideAlert('alertaModal');
   document.getElementById('tituloModalAdvogado').textContent = 'Editar advogado';
@@ -246,28 +248,57 @@ function atualizarPreviaFoto() {
   img.style.display = 'block';
 }
 
-let previaArquivoUrl = null;
+// Identificador evita que uma prévia assíncrona antiga substitua a foto atual.
+let versaoPreviaFoto = 0;
 
-function previaArquivoSelecionado() {
+async function previaArquivoSelecionado() {
+  const versao = ++versaoPreviaFoto;
   const input = document.getElementById('advFotoArquivo');
   const arquivo = input.files[0];
-  if (previaArquivoUrl) {
-    URL.revokeObjectURL(previaArquivoUrl);
-    previaArquivoUrl = null;
-  }
   const img = document.getElementById('previaFoto');
   img.removeAttribute('src');
   img.style.display = 'none';
   if (!arquivo) return;
+
   if (!validarArquivoFoto(arquivo)) {
     input.value = '';
     showAlert('alertaModal', 'Selecione uma imagem JPEG, PNG ou WebP de até 3 MB.', 'erro');
     return;
   }
-  hideAlert('alertaModal');
-  previaArquivoUrl = URL.createObjectURL(arquivo);
-  img.src = previaArquivoUrl;
-  img.style.display = 'block';
+
+  let bitmap;
+  try {
+    if (typeof createImageBitmap !== 'function') {
+      throw new Error('Pré-visualização indisponível neste navegador.');
+    }
+    // Decodifica a imagem antes de exibir: não carrega o arquivo bruto no DOM.
+    bitmap = await createImageBitmap(arquivo);
+    if (versao !== versaoPreviaFoto || input.files[0] !== arquivo) return;
+    if (!bitmap.width || !bitmap.height) throw new Error('Imagem inválida.');
+
+    const escala = Math.min(1, 512 / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * escala));
+    canvas.height = Math.max(1, Math.round(bitmap.height * escala));
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Pré-visualização indisponível neste navegador.');
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+
+    const previaPng = canvas.toDataURL('image/png');
+    if (versao !== versaoPreviaFoto || input.files[0] !== arquivo) return;
+    img.src = previaPng;
+    img.style.display = 'block';
+    hideAlert('alertaModal');
+  } catch (_) {
+    if (versao === versaoPreviaFoto) {
+      input.value = '';
+      img.removeAttribute('src');
+      img.style.display = 'none';
+      showAlert('alertaModal', 'Não foi possível visualizar a imagem. Escolha outro arquivo JPEG, PNG ou WebP.', 'erro');
+    }
+  } finally {
+    if (bitmap) bitmap.close();
+  }
 }
 
 async function prepararFotoOtimizada(arquivo) {
@@ -298,13 +329,10 @@ async function prepararFotoOtimizada(arquivo) {
 }
 
 function fecharModalNovo() {
+  ++versaoPreviaFoto;
   document.getElementById('modalAdvogado').classList.remove('show');
   document.getElementById('formAdvogado').reset();
   document.getElementById('previaFoto').style.display = 'none';
-  if (previaArquivoUrl) {
-    URL.revokeObjectURL(previaArquivoUrl);
-    previaArquivoUrl = null;
-  }
   hideAlert('alertaModal');
   advogadoEditandoId = null;
 }
