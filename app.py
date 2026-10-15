@@ -1517,13 +1517,10 @@ def confirmar_email_comercial():
     if not escritorio or not escritorio.email_confirmacao_obrigatoria:
         return jsonify({'erro': 'Não foi possível confirmar este cadastro.'}), 400
     if escritorio.email_confirmado_em:
-        return _resposta_com_sessao({
-            'ok': True,
-            'nome': escritorio.nome,
-            'plano': escritorio.plano,
-            'plano_pretendido': escritorio.plano_pretendido,
-            'proximo': '/contratacao',
-        }, {'id': escritorio.id, 'tipo': 'escritorio'}, escritorio.senha_hash)
+        # Nunca emitir sessão aqui: conta já confirmada só entra por login e senha.
+        return jsonify({
+            'erro': 'Não foi possível confirmar este cadastro. Se o e-mail já foi confirmado, faça login.'
+        }), 400
     if not escritorio.email_confirmacao_expira or escritorio.email_confirmacao_expira <= agora_utc():
         return jsonify({'erro': 'O código expirou. Solicite um novo código.'}), 400
     if not escritorio.email_confirmacao_token_hash or not hmac.compare_digest(
