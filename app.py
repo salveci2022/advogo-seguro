@@ -884,6 +884,34 @@ def _cliente_possui_processos_de_outro_escritorio(cliente_id, escritorio_id):
     ).first() is not None
 
 
+CLIENTE_NOME_PROTEGIDO = 'Cliente vinculado a outro escritório'
+
+
+def _titulares_dos_clientes(cliente_ids):
+    """Escritório titular de cada cliente: o do processo mais antigo, que criou o cadastro."""
+    ids = {cid for cid in cliente_ids if cid}
+    if not ids:
+        return {}
+    titulares = {}
+    for cliente_id, escritorio_id in db.session.query(Processo.cliente_id, Processo.escritorio_id).filter(
+        Processo.cliente_id.in_(ids)
+    ).order_by(Processo.id.asc()):
+        titulares.setdefault(cliente_id, escritorio_id)
+    return titulares
+
+
+def _dados_cliente_visiveis(cliente, escritorio_id, titulares=None):
+    """Nome e e-mail que este escritório pode ver; o cadastro de outro escritório fica protegido (R1)."""
+    if cliente is None:
+        return {'nome': None, 'email': None}
+    if titulares is None:
+        titulares = _titulares_dos_clientes([cliente.id])
+    titular = titulares.get(cliente.id)
+    if titular is None or titular == escritorio_id:
+        return {'nome': cliente.nome, 'email': cliente.email}
+    return {'nome': CLIENTE_NOME_PROTEGIDO, 'email': None}
+
+
 def _excluir_cliente_em_cascata(cliente, escritorio_id):
     """
     Apaga todos os processos (e filhos) que este escritório tem com o
@@ -2096,7 +2124,7 @@ def processos():
             'id': processo.id,
             'codigo_unico': processo.codigo_unico,
             'cliente_id': cliente.id,
-            'cliente_nome': cliente.nome,
+            'cliente_nome': _dados_cliente_visiveis(cliente, request.escritorio.id)['nome'],
             'cliente_existente': cliente_existente,
             'senha_temporaria': senha_temp,
             'mensagem_acesso': (
@@ -2119,11 +2147,13 @@ def processos():
     if precisa_commit:
         db.session.commit()
 
+    titulares = _titulares_dos_clientes(p.cliente_id for p in lista)
     return jsonify([{
         'id': p.id, 'codigo_unico': p.codigo_unico, 'numero_processo': p.numero_processo,
         'descricao': p.descricao, 'status': p.status,
         'cliente_id': p.cliente_id, 'advogado_id': p.advogado_id,
-        'cliente_nome': p.cliente.nome, 'cliente_telefone': p.cliente.telefone,
+        'cliente_nome': _dados_cliente_visiveis(p.cliente, request.escritorio.id, titulares)['nome'],
+        'cliente_telefone': p.cliente.telefone,
         'advogado_nome': p.advogado.nome if p.advogado else None,
         'criado_em': p.criado_em.strftime('%d/%m/%Y'),
         'link_cliente_seguro': f'/cliente/seguro/{p.token_cliente}'
@@ -2202,11 +2232,12 @@ def listar_tentativas():
         Processo.escritorio_id == request.escritorio.id
     ).order_by(TentativaContato.criado_em.desc()).limit(100).all()
 
+    titulares = _titulares_dos_clientes(t.processo.cliente_id for t in tentativas)
     return jsonify([{
         'id': t.id, 'numero_suspeito': t.numero_suspeito, 'canal': t.canal,
         'descricao': t.descricao, 'confirmado_golpe': t.confirmado_golpe,
         'processo_codigo': t.processo.codigo_unico,
-        'cliente_nome': t.processo.cliente.nome,
+        'cliente_nome': _dados_cliente_visiveis(t.processo.cliente, request.escritorio.id, titulares)['nome'],
         'criado_em': t.criado_em.strftime('%d/%m/%Y %H:%M')
     } for t in tentativas])
 
@@ -2257,16 +2288,17 @@ def excluir_tentativas_lote():
 # CLIENTES
 # ──────────────────────────────────────────────
 
-def _serializar_cliente(cliente, escritorio_id, processos_count=None):
+def _serializar_cliente(cliente, escritorio_id, processos_count=None, titulares=None):
     if processos_count is None:
         processos_count = db.session.query(func.count(Processo.id)).filter_by(
             cliente_id=cliente.id, escritorio_id=escritorio_id
         ).scalar() or 0
+    visiveis = _dados_cliente_visiveis(cliente, escritorio_id, titulares)
     return {
         'id': cliente.id,
-        'nome': cliente.nome,
+        'nome': visiveis['nome'],
         'telefone': cliente.telefone,
-        'email': cliente.email,
+        'email': visiveis['email'],
         'ativo': cliente.ativo,
         'processos_count': int(processos_count),
         'criado_em': cliente.criado_em.strftime('%d/%m/%Y') if cliente.criado_em else None
@@ -2296,8 +2328,9 @@ def listar_clientes():
     ).filter(
         Processo.escritorio_id == request.escritorio.id
     ).group_by(Cliente.id).order_by(Cliente.nome.asc()).all()
+    titulares = _titulares_dos_clientes(cliente.id for cliente, _ in lista)
     return jsonify([
-        _serializar_cliente(cliente, request.escritorio.id, processos_count)
+        _serializar_cliente(cliente, request.escritorio.id, processos_count, titulares)
         for cliente, processos_count in lista
     ])
 
@@ -2408,13 +2441,13 @@ LABEL_CANAL = {
 }
 
 
-def _serializar_cca_escritorio(c):
+def _serializar_cca_escritorio(c, titulares=None):
     """Serialização para o painel do escritório — aqui sim o código é exibido."""
     return {
         'id': c.id,
         'codigo_cca': c.codigo_cca,
         'advogado_nome': c.advogado.nome if c.advogado else None,
-        'cliente_nome': c.cliente.nome if c.cliente else None,
+        'cliente_nome': _dados_cliente_visiveis(c.cliente, c.escritorio_id, titulares)['nome'],
         'processo_codigo': c.processo.codigo_unico if c.processo else None,
         'canal': c.canal,
         'status': c.status_atual(),
@@ -2507,7 +2540,8 @@ def listar_contato_seguro():
         joinedload(ContatoSeguro.processo),
     ).filter_by(escritorio_id=request.escritorio.id) \
         .order_by(ContatoSeguro.criado_em.desc()).limit(100).all()
-    return jsonify([_serializar_cca_escritorio(c) for c in lista])
+    titulares = _titulares_dos_clientes(c.cliente_id for c in lista)
+    return jsonify([_serializar_cca_escritorio(c, titulares) for c in lista])
 
 
 @app.route('/api/escritorio/contato-seguro/cancelar/<int:contato_id>', methods=['POST'])
@@ -3532,7 +3566,7 @@ def relatorio_contato_seguro_pdf(contato_id):
         ('Código CCA', contato.codigo_cca),
         ('Escritório', contato.escritorio.nome),
         ('Advogado responsável', contato.advogado.nome if contato.advogado else '—'),
-        ('Cliente', contato.cliente.nome if contato.cliente else '—'),
+        ('Cliente', _dados_cliente_visiveis(contato.cliente, request.escritorio.id)['nome'] or '—'),
         ('Processo', contato.processo.codigo_unico if contato.processo else '—'),
         ('Canal', LABEL_CANAL.get(contato.canal, contato.canal)),
         ('Status', contato.status_atual().upper()),
@@ -3564,7 +3598,7 @@ def relatorio_tentativa_pdf(tentativa_id):
     story.append(_tabela_chave_valor([
         ('Escritório', processo.escritorio.nome),
         ('Advogado responsável', processo.advogado.nome if processo.advogado else '—'),
-        ('Cliente', processo.cliente.nome if processo.cliente else '—'),
+        ('Cliente', _dados_cliente_visiveis(processo.cliente, request.escritorio.id)['nome'] or '—'),
         ('Processo (código interno)', processo.codigo_unico),
         ('Nº do processo', processo.numero_processo or '—'),
         ('Canal', LABEL_CANAL.get(tentativa.canal, tentativa.canal)),
@@ -3618,10 +3652,12 @@ def relatorio_mensal_pdf():
         story.append(Spacer(1, 10))
         story.append(Paragraph('Detalhamento das tentativas suspeitas', _ESTILO_SECAO))
         linhas = [['Data', 'Cliente', 'Canal', 'Confirmado golpe?']]
+        titulares = _titulares_dos_clientes(t.processo.cliente_id for t in tentativas if t.processo)
         for t in tentativas:
             linhas.append([
                 _data_brasilia_pdf(t.criado_em, '%d/%m %H:%M'),
-                t.processo.cliente.nome if t.processo and t.processo.cliente else '—',
+                (_dados_cliente_visiveis(t.processo.cliente, request.escritorio.id, titulares)['nome'] or '—')
+                if t.processo else '—',
                 LABEL_CANAL.get(t.canal, t.canal or '—'),
                 'Sim' if t.confirmado_golpe else 'Não'
             ])
@@ -3659,7 +3695,7 @@ def relatorio_processo_pdf(processo_id):
     _cabecalho_pdf(story, 'Relatório por Cliente / Processo')
     story.append(_tabela_chave_valor([
         ('Escritório', processo.escritorio.nome),
-        ('Cliente', processo.cliente.nome if processo.cliente else '—'),
+        ('Cliente', _dados_cliente_visiveis(processo.cliente, request.escritorio.id)['nome'] or '—'),
         ('Advogado responsável', processo.advogado.nome if processo.advogado else '—'),
         ('Processo (código interno)', processo.codigo_unico),
         ('Nº do processo', processo.numero_processo or '—'),
