@@ -9,7 +9,7 @@ from datetime import timedelta
 
 import pytest
 
-from conftest import appmodule
+from conftest import appmodule, cliente_ja_criou_senha_pessoal
 
 ALFABETO = appmodule.CCA_ALFABETO
 FORMATO = re.compile(r'^CCA-[' + ALFABETO + r']{4}-[' + ALFABETO + r']{4}$')
@@ -52,6 +52,7 @@ def iniciar(client, c):
 
 
 def headers_cliente(client, c):
+    cliente_ja_criou_senha_pessoal(TELEFONE)
     login = client.post('/api/cliente/login', json={
         'telefone': TELEFONE, 'senha': c['proc']['senha_temporaria']
     })

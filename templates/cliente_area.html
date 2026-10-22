@@ -21,6 +21,8 @@
 
 <div class="container-narrow" style="padding-top:36px; padding-bottom:60px;">
 
+  <div id="avisoTrocaSenha" class="alert-box" role="alert"></div>
+
   <div class="panel" style="border:2px solid var(--azul-medio); text-align:center;">
     <div style="font-size:1.3rem; font-weight:800; color:var(--azul-escuro); margin-bottom:6px;">
       📞 Alguém ligou ou mandou mensagem dizendo ser seu advogado?
@@ -161,7 +163,7 @@
     </div>
   </div>
 
-  <div class="panel">
+  <div class="panel" id="painelSenhaCliente">
     <div class="panel-head"><h2>🔒 Alterar senha</h2></div>
     <div id="alertaSenhaCliente" class="alert-box"></div>
     <form id="formSenhaCliente">
@@ -279,8 +281,25 @@ document.getElementById('formSuspeita').addEventListener('submit', async (e) => 
   }
 });
 
+// APPSEC-005: enquanto a senha for a temporária do escritório, só a troca de senha fica visível.
+let trocaSenhaObrigatoria = false;
+function entrarModoTrocaObrigatoria() {
+  trocaSenhaObrigatoria = true;
+  document.querySelectorAll('.container-narrow > .panel').forEach(painel => {
+    if (painel.id !== 'painelSenhaCliente') painel.style.display = 'none';
+  });
+  showAlert('avisoTrocaSenha',
+    'Por segurança, crie uma senha pessoal antes de continuar. A senha que você recebeu do escritório é temporária. ' +
+    'Em "Senha atual", digite a senha que recebeu.', 'erro');
+  document.getElementById('painelSenhaCliente').scrollIntoView({ block: 'start' });
+}
+try {
+  if (sessionStorage.getItem('advogo_troca_senha') === '1') entrarModoTrocaObrigatoria();
+} catch (_) {}
+
 async function carregarProcessosCliente() {
   const lista_el = document.getElementById('listaProcessosCliente');
+  if (trocaSenhaObrigatoria) return;
   try {
     const lista = await apiRequest('/api/cliente/processos');
     if (lista.length === 0) {
@@ -300,6 +319,10 @@ async function carregarProcessosCliente() {
       </div>
     `).join('');
   } catch (err) {
+    if (err.payload && err.payload.troca_senha_obrigatoria) {
+      entrarModoTrocaObrigatoria();
+      return;
+    }
     showAlert('alertaProcessosCliente', err.message, 'erro');
   }
 }
@@ -418,6 +441,12 @@ document.getElementById('formSenhaCliente').addEventListener('submit', async (e)
     });
     showAlert('alertaSenhaCliente', data.mensagem, 'sucesso');
     document.getElementById('formSenhaCliente').reset();
+    // A troca invalida a sessão atual (cv); entra de novo já com a senha pessoal.
+    try { sessionStorage.removeItem('advogo_troca_senha'); } catch (_) {}
+    if (trocaSenhaObrigatoria) {
+      Auth.clearLocal();
+      setTimeout(() => { window.location.href = '/cliente/login'; }, 1500);
+    }
   } catch (err) {
     showAlert('alertaSenhaCliente', err.message, 'erro');
   } finally {

@@ -9,7 +9,7 @@ import re
 
 import pytest
 
-from conftest import appmodule
+from conftest import appmodule, cliente_ja_criou_senha_pessoal
 
 TELEFONE = '61988887777'
 OFICIAL = '61911112222'
@@ -41,6 +41,7 @@ def cenario(client):
     proc = client.post('/api/escritorio/processos', json={
         'advogado_id': adv, 'cliente_nome': 'Cliente Canal', 'cliente_telefone': TELEFONE
     }, headers=he).get_json()
+    cliente_ja_criou_senha_pessoal(TELEFONE)
     login = client.post('/api/cliente/login', json={'telefone': TELEFONE, 'senha': proc['senha_temporaria']})
     hc = {'Authorization': f"Bearer {login.get_json()['token']}"}
     token = proc['link_cliente_seguro'].rsplit('/', 1)[-1]

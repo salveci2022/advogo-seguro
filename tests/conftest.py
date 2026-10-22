@@ -55,3 +55,15 @@ def criar_vinculo_legado(advogado_id, telefone):
         db.session.add(processo)
         db.session.commit()
         return {'id': processo.id, 'codigo_unico': processo.codigo_unico, 'cliente_id': cliente.id}
+
+
+def cliente_ja_criou_senha_pessoal(telefone):
+    """Simula cliente que já concluiu a troca obrigatória de senha (APPSEC-005).
+
+    Usado pelos testes de outras funcionalidades da área do cliente; o fluxo de troca em si
+    é coberto em test_appsec005_troca_senha_cliente.py.
+    """
+    with flask_app.app_context():
+        cliente = appmodule.Cliente.query.filter_by(telefone=telefone).one()
+        cliente.troca_senha_obrigatoria = False
+        db.session.commit()

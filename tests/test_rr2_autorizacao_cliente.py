@@ -13,7 +13,7 @@ from datetime import timedelta
 from sqlalchemy import create_engine, update
 from sqlalchemy.exc import SQLAlchemyError
 
-from conftest import appmodule
+from conftest import appmodule, cliente_ja_criou_senha_pessoal
 
 TELEFONE = '61988880001'
 NOME_REAL = 'Maria Titular da Silva'
@@ -50,6 +50,7 @@ def post_processo(client, headers, advogado_id, telefone=TELEFONE, codigo=None, 
 
 
 def login_cliente(client, senha, telefone=TELEFONE):
+    cliente_ja_criou_senha_pessoal(telefone)
     resp = client.post('/api/cliente/login', json={'telefone': telefone, 'senha': senha})
     assert resp.status_code == 200, resp.get_json()
     return {'Authorization': f"Bearer {resp.get_json()['token']}"}

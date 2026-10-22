@@ -5,7 +5,7 @@ Cadastro existente só é reutilizado pelo escritório que já tem processo com 
 cliente. Qualquer outro caso (cliente de outro escritório ou cadastro sem
 processos) responde 409 sem dados pessoais e sem criar vínculo.
 """
-from conftest import appmodule, criar_vinculo_legado
+from conftest import appmodule, cliente_ja_criou_senha_pessoal, criar_vinculo_legado
 
 TELEFONE = '61988880001'
 NOME_REAL = 'Maria Titular da Silva'
@@ -58,6 +58,7 @@ def contagens(cliente_id):
 
 def processos_na_area_do_cliente(client, senha):
     client.delete_cookie(appmodule.AUTH_COOKIE_NAME)
+    cliente_ja_criou_senha_pessoal(TELEFONE)
     login = client.post('/api/cliente/login', json={'telefone': TELEFONE, 'senha': senha})
     assert login.status_code == 200, login.get_json()
     token = login.get_json()['token']

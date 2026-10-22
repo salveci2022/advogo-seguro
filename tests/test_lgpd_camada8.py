@@ -14,6 +14,7 @@ def criar_cliente(telefone, email):
         telefone=telefone,
         email=email,
         senha_hash=appmodule.hash_senha('SenhaCliente123!'),
+        troca_senha_obrigatoria=False,  # cliente que já criou a senha pessoal (APPSEC-005)
     )
     db.session.add(cliente)
     db.session.commit()

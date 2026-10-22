@@ -634,6 +634,9 @@ class Cliente(db.Model):
     criado_em = db.Column(db.DateTime, default=agora_utc)
     reset_token = db.Column(db.String(100))
     reset_token_expira = db.Column(db.DateTime)
+    # APPSEC-005: TRUE enquanto a senha vier do escritório (temporária ou link de novo acesso).
+    # Só vira FALSE quando o próprio titular, autenticado, cria a senha pessoal.
+    troca_senha_obrigatoria = db.Column(db.Boolean, default=True, server_default=text('TRUE'), nullable=False)
 
     verificacoes = db.relationship('Verificacao', backref='cliente', lazy=True, cascade='all, delete-orphan')
 
@@ -834,6 +837,8 @@ def _garantir_colunas_novas():
         ('advogados', 'foto_mime', 'VARCHAR(50)'),
         ('advogados', 'foto_token', 'VARCHAR(64)'),
         ('clientes', 'ativo', 'BOOLEAN NOT NULL DEFAULT TRUE'),
+        # APPSEC-005: clientes já existentes também passam a trocar a senha no próximo login.
+        ('clientes', 'troca_senha_obrigatoria', 'BOOLEAN NOT NULL DEFAULT TRUE'),
         ('escritorios', 'email_confirmacao_obrigatoria', 'BOOLEAN NOT NULL DEFAULT FALSE'),
         ('escritorios', 'email_confirmado_em', 'TIMESTAMP'),
         ('escritorios', 'email_confirmacao_token_hash', 'VARCHAR(64)'),
@@ -1319,10 +1324,24 @@ def login_cliente_obrigatorio(f):
             return jsonify({'erro': 'Sessão expirada. Faça login novamente.'}), 401
         if not _csrf_valido(dados, origem):
             return jsonify({'erro': 'Requisição de segurança inválida. Atualize a página e tente novamente.'}), 403
+        if cliente.troca_senha_obrigatoria and not getattr(f, 'liberado_com_troca_de_senha_pendente', False):
+            return jsonify({'erro': MENSAGEM_TROCA_SENHA_OBRIGATORIA, 'troca_senha_obrigatoria': True}), 403
         request.cliente = cliente
         request.auth_dados = dados
         return f(*args, **kwargs)
     return wrapper
+
+
+MENSAGEM_TROCA_SENHA_OBRIGATORIA = (
+    'Por segurança, crie uma senha pessoal antes de continuar. '
+    'A senha recebida do escritório é temporária.'
+)
+
+
+def liberado_com_troca_de_senha_pendente(f):
+    """APPSEC-005: marca a única rota do cliente acessível antes de ele criar a senha pessoal."""
+    f.liberado_com_troca_de_senha_pendente = True
+    return f
 
 
 def _base_url_publica():
@@ -1497,6 +1516,7 @@ def redefinir_senha_escritorio():
 
 @app.route('/api/cliente/senha', methods=['POST'])
 @login_cliente_obrigatorio
+@liberado_com_troca_de_senha_pendente
 def trocar_senha_cliente():
     data = request.get_json() or {}
     senha_atual = data.get('senha_atual') or ''
@@ -1506,8 +1526,13 @@ def trocar_senha_cliente():
         return jsonify({'erro': 'Senha atual incorreta'}), 401
     if len(nova_senha) < SENHA_MIN_CARACTERES:
         return jsonify({'erro': f'A nova senha deve ter no mínimo {SENHA_MIN_CARACTERES} caracteres'}), 400
+    if nova_senha == senha_atual:
+        return jsonify({'erro': 'A nova senha precisa ser diferente da senha atual.'}), 400
 
+    # Única forma de tornar a credencial definitiva: o titular autenticado criando a própria senha.
+    # A troca muda o senha_hash e, pelo 'cv' do JWT, invalida as sessões anteriores.
     request.cliente.senha_hash = hash_senha(nova_senha)
+    request.cliente.troca_senha_obrigatoria = False
     db.session.commit()
     return jsonify({'ok': True, 'mensagem': 'Senha alterada com sucesso'})
 
@@ -1553,8 +1578,13 @@ def redefinir_senha_cliente():
     cliente.senha_hash = hash_senha(nova_senha)
     cliente.reset_token = None
     cliente.reset_token_expira = None
+    # O link é gerado e entregue pelo escritório; concluí-lo não torna a credencial definitiva.
+    cliente.troca_senha_obrigatoria = True
     db.session.commit()
-    return jsonify({'ok': True, 'mensagem': 'Senha redefinida com sucesso. Faça login com a nova senha.'})
+    return jsonify({
+        'ok': True,
+        'mensagem': 'Senha redefinida. Faça login com ela; no primeiro acesso você criará sua senha pessoal.',
+    })
 
 
 @app.route('/api/escritorio/cliente/<int:cliente_id>/link-reset', methods=['POST'])
@@ -2350,7 +2380,8 @@ def processos():
                 nome=cliente_nome,
                 telefone=telefone_normalizado,
                 email=cliente_email,
-                senha_hash=hash_senha(senha_temp)
+                senha_hash=hash_senha(senha_temp),
+                troca_senha_obrigatoria=True,
             )
             db.session.add(cliente)
             db.session.flush()
@@ -2962,7 +2993,7 @@ def login_cliente():
         db.session.commit()
 
     return _resposta_com_sessao(
-        {'nome': cliente.nome},
+        {'nome': cliente.nome, 'troca_senha_obrigatoria': bool(cliente.troca_senha_obrigatoria)},
         {'id': cliente.id, 'tipo': 'cliente'},
         cliente.senha_hash
     )
