@@ -20,6 +20,7 @@ import smtplib
 import ssl
 import sqlite3
 from email.message import EmailMessage
+from xml.sax.saxutils import escape as xml_escape
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from functools import wraps
@@ -3893,7 +3894,13 @@ def _cabecalho_pdf(story, subtitulo_relatorio):
     story.append(Paragraph('SEGURANÇA E VALIDAÇÃO DA COMUNICAÇÃO JURÍDICA', _ESTILO_SUBTITULO))
     story.append(HRFlowable(width='100%', color=colors.HexColor('#b9923f'), thickness=1.2))
     story.append(Spacer(1, 8))
-    story.append(Paragraph(subtitulo_relatorio, _ESTILO_SECAO))
+    story.append(Paragraph(_texto_pdf(subtitulo_relatorio), _ESTILO_SECAO))
+
+
+def _texto_pdf(valor):
+    """APPSEC-006: o Paragraph do ReportLab interpreta marcação (<img src> busca URL/arquivo,
+    <a href> vira link, tag malformada derruba o PDF). Todo valor dinâmico entra como texto."""
+    return xml_escape(str(valor))
 
 
 def _rodape_pdf(story):
@@ -3909,7 +3916,8 @@ def _rodape_pdf(story):
 
 def _tabela_chave_valor(pares):
     """Monta uma tabela simples de 'Campo: Valor' para os relatórios."""
-    dados = [[Paragraph(f'<b>{k}</b>', _ESTILO_NORMAL), Paragraph(str(v) if v else '—', _ESTILO_NORMAL)] for k, v in pares]
+    dados = [[Paragraph(f'<b>{_texto_pdf(k)}</b>', _ESTILO_NORMAL),
+              Paragraph(_texto_pdf(v) if v else '—', _ESTILO_NORMAL)] for k, v in pares]
     tabela = Table(dados, colWidths=[55 * mm, 105 * mm])
     tabela.setStyle(TableStyle([
         ('GRID', (0, 0), (-1, -1), 0.4, colors.HexColor('#e1e6ef')),
