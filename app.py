@@ -424,9 +424,13 @@ def _ip_confiavel():
 
 
 def _chave_rate_limit(identificador, por_ip=True):
+    identificador = identificador.lower()
+    if len(identificador) > 128:
+        # APPSEC-012: e-mail/telefone/código gigante não vira chave gigante em memória.
+        identificador = 'h:' + hashlib.sha256(identificador.encode('utf-8')).hexdigest()
     if not por_ip:
-        return f'{PREFIXO_CHAVE_CONTA}{identificador.lower()}'
-    return f'{_ip_confiavel()}:{identificador.lower()}'
+        return f'{PREFIXO_CHAVE_CONTA}{identificador}'
+    return f'{_ip_confiavel()}:{identificador}'
 
 
 def _janela_da_chave(chave):
@@ -1705,10 +1709,25 @@ def _outro_escritorio_ja_usou_beneficio(documento, escritorio_id, campo='cnpj'):
     return False
 
 
+# APPSEC-012: tamanho máximo dos campos do cadastro público (colunas de 200 caracteres).
+LIMITE_NOME_CADASTRO = 200
+LIMITE_EMAIL_CADASTRO = 200
+LIMITE_SENHA = 256
+
+
+def _campos_cadastro_grandes_demais(nome, email, senha):
+    return len(nome) > LIMITE_NOME_CADASTRO or len(email) > LIMITE_EMAIL_CADASTRO or len(senha) > LIMITE_SENHA
+
+
+MENSAGEM_CADASTRO_GRANDE = (
+    f'Nome e e-mail aceitam até {LIMITE_NOME_CADASTRO} caracteres e a senha até {LIMITE_SENHA}.'
+)
+
+
 def _registrar_escritorio_comercial(data):
-    nome = (data.get('nome') or '').strip()
-    email = (data.get('email') or '').strip().lower()
-    senha = data.get('senha') or ''
+    nome = str(data.get('nome') or '').strip()
+    email = str(data.get('email') or '').strip().lower()
+    senha = str(data.get('senha') or '')
     tipo_pessoa = str(data.get('tipo_pessoa') or 'PJ').strip().upper()
     cnpj = _somente_digitos(data.get('cnpj'))
     cpf = _somente_digitos(data.get('cpf'))
@@ -1726,6 +1745,8 @@ def _registrar_escritorio_comercial(data):
         return jsonify({
             'erro': f'Preencha nome, e-mail e senha (mín. {SENHA_MIN_CARACTERES} caracteres).'
         }), 400
+    if _campos_cadastro_grandes_demais(nome, email, senha):
+        return jsonify({'erro': MENSAGEM_CADASTRO_GRANDE}), 400
     if tipo_pessoa not in {'PF', 'PJ'}:
         return jsonify({'erro': 'Informe se o cadastro é de Pessoa Física ou Pessoa Jurídica.'}), 400
     if tipo_pessoa == 'PF':
@@ -1900,13 +1921,15 @@ def registro_escritorio():
     data = request.get_json() or {}
     if COMMERCIAL_FLOW_ENABLED:
         return _registrar_escritorio_comercial(data)
-    nome = (data.get('nome') or '').strip()
-    email = (data.get('email') or '').strip().lower()
-    senha = data.get('senha') or ''
-    cnpj = (data.get('cnpj') or '').strip()
+    nome = str(data.get('nome') or '').strip()
+    email = str(data.get('email') or '').strip().lower()
+    senha = str(data.get('senha') or '')
+    cnpj = str(data.get('cnpj') or '').strip()
 
     if not nome or not email or len(senha) < SENHA_MIN_CARACTERES:
         return jsonify({'erro': f'Preencha nome, email e senha (mín. {SENHA_MIN_CARACTERES} caracteres)'}), 400
+    if _campos_cadastro_grandes_demais(nome, email, senha) or len(cnpj) > 20:
+        return jsonify({'erro': MENSAGEM_CADASTRO_GRANDE}), 400
 
     if Escritorio.query.filter_by(email=email).first():
         return jsonify({'erro': 'Email já cadastrado'}), 409
@@ -3521,27 +3544,65 @@ def _avatar_iniciais(nome):
     return (partes[0][0] + partes[-1][0]).upper()
 
 
+# APPSEC-012: limites das rotas públicas que gravam dados. Os tamanhos seguem as colunas do
+# banco (valor maior gerava erro 500 no PostgreSQL) e são validados no servidor, não só no HTML.
+LIMITE_DESCRICAO_PUBLICA = 500       # TentativaContato.descricao
+LIMITE_NUMERO_PUBLICO = 20           # TentativaContato.numero_suspeito
+LIMITE_CODIGO_PROCESSO = 12          # Processo.codigo_unico
+LIMITE_TEXTO_ANALISE = 5000          # texto colado para a análise anti-golpe
+LIMITE_TOKEN_LINK = 100              # token_cliente tem ~38 caracteres
+TIPOS_ALERTA_PUBLICO = ('nao_reconheco', 'pix', 'suspeita_geral')
+# Por token do link seguro, qualquer que seja o IP (o cliente usa poucos cliques por contato).
+LIMITE_LINK_LEITURA = (30, 600)
+LIMITE_LINK_ESCRITA = (10, 600)
+MENSAGEM_LINK_INVALIDO = {'valido': False, 'mensagem': 'Link inválido ou expirado.'}
+
+
+def _campo_texto_publico(data, campo, limite, padrao=''):
+    """Retorna (valor, erro). Recusa tipo diferente de texto e excesso de tamanho."""
+    valor = data.get(campo)
+    if valor is None:
+        return padrao, None
+    if not isinstance(valor, str):
+        return None, f'Campo {campo} inválido.'
+    if len(valor) > limite:
+        return None, f'O campo {campo} aceita no máximo {limite} caracteres.'
+    return valor, None
+
+
+def _limite_link_seguro(token, escrita=False):
+    """Limite por IP e por token. O token entra só como hash: o valor bruto não fica em memória nem em log."""
+    permitido, espera = verificar_limite_acao('cliente-publico-link-seguro', 60, 60)
+    if not permitido:
+        return permitido, espera
+    referencia = hashlib.sha256(f'link-seguro:{token}'.encode('utf-8')).hexdigest()[:32]
+    maximo, janela = LIMITE_LINK_ESCRITA if escrita else LIMITE_LINK_LEITURA
+    tipo = 'escrita' if escrita else 'leitura'
+    return verificar_limite_acao(f'link-seguro-{tipo}:{referencia}', maximo, janela, por_ip=False)
+
+
+def _processo_do_link(token):
+    if not token or len(token) > LIMITE_TOKEN_LINK:
+        return None
+    return Processo.query.filter_by(token_cliente=token, status='ativo').first()
+
+
 @app.route('/api/cliente-publico/contato-seguro/<token>', methods=['GET'])
 def contato_seguro_publico(token):
     """
     Rota pública e segura: NÃO lista clientes, NÃO aceita busca por nome/telefone —
     só funciona com o token exato, longo e aleatório, gerado na criação do processo.
     """
-    permitido, espera = verificar_limite_acao('cliente-publico-link-seguro', 60, 60)
+    permitido, espera = _limite_link_seguro(token)
     if not permitido:
         return jsonify({'erro': f'Muitas solicitações. Tente novamente em {espera} segundos.'}), 429
-    processo = Processo.query.filter_by(token_cliente=token, status='ativo').first()
-
-    db.session.add(AcessoPublicoLog(
-        processo_id=processo.id if processo else None,
-        acao='visualizou',
-        ip=_ip_requisicao()
-    ))
-    db.session.commit()
-
+    processo = _processo_do_link(token)
     if not processo:
-        # mensagem genérica — nunca revela se o token "quase" existe
-        return jsonify({'valido': False, 'mensagem': 'Link inválido ou expirado.'}), 404
+        # Mensagem genérica, e acesso com token inválido não grava nada (APPSEC-012).
+        return jsonify(MENSAGEM_LINK_INVALIDO), 404
+
+    db.session.add(AcessoPublicoLog(processo_id=processo.id, acao='visualizou', ip=_ip_requisicao()))
+    db.session.commit()
 
     agora = agora_utc()
     cca_ativo = ContatoSeguro.query.filter_by(processo_id=processo.id, status='ativo') \
@@ -3569,32 +3630,34 @@ def registrar_alerta_publico(token):
     acessíveis sem login. Sempre responde de forma genérica para não confirmar
     nem negar a existência do token a quem está só "tentando a sorte".
     """
-    permitido, espera = verificar_limite_acao('cliente-publico-link-seguro', 60, 60)
-    if not permitido:
-        return jsonify({'erro': f'Muitas solicitações. Tente novamente em {espera} segundos.'}), 429
-    processo = Processo.query.filter_by(token_cliente=token, status='ativo').first()
     data = request.get_json() or {}
-    tipo = data.get('tipo', 'nao_reconheco')  # nao_reconheco | pix | suspeita_geral
+    tipo = data.get('tipo') or 'nao_reconheco'
+    if tipo not in TIPOS_ALERTA_PUBLICO:
+        return jsonify({'erro': 'Tipo de alerta inválido.'}), 400
     canal = _canal_da_requisicao(data)
     if not canal:
         return jsonify({'erro': MENSAGEM_CANAL_INVALIDO}), 400
+    numero, erro = _campo_texto_publico(data, 'numero', LIMITE_NUMERO_PUBLICO)
+    descricao, erro_descricao = _campo_texto_publico(data, 'descricao', LIMITE_DESCRICAO_PUBLICA)
+    if erro or erro_descricao:
+        return jsonify({'erro': erro or erro_descricao}), 400
 
-    db.session.add(AcessoPublicoLog(
-        processo_id=processo.id if processo else None,
-        acao=tipo,
-        ip=_ip_requisicao()
-    ))
+    permitido, espera = _limite_link_seguro(token, escrita=True)
+    if not permitido:
+        return jsonify({'erro': f'Muitas solicitações. Tente novamente em {espera} segundos.'}), 429
 
+    # Token inválido não grava nada, mas a resposta é a mesma (não confirma se o link existe).
+    processo = _processo_do_link(token)
     if processo:
+        db.session.add(AcessoPublicoLog(processo_id=processo.id, acao=tipo, ip=_ip_requisicao()))
         db.session.add(TentativaContato(
             processo_id=processo.id,
-            numero_suspeito=data.get('numero', ''),
+            numero_suspeito=numero,
             canal=canal,
-            descricao=data.get('descricao') or f'Alerta registrado pelo cliente via link seguro ({tipo}).',
+            descricao=descricao or f'Alerta registrado pelo cliente via link seguro ({tipo}).',
             confirmado_golpe=False
         ))
-
-    db.session.commit()
+        db.session.commit()
 
     mensagens = {
         'pix': 'Alerta de golpe. Não envie dinheiro agora. Golpistas costumam pedir Pix, taxa ou pagamento '
@@ -3624,17 +3687,15 @@ def cliente_publico_seguro(token):
 @app.route('/api/cliente-publico/contato-ativo/<token>', methods=['GET'])
 def cliente_publico_contato_ativo(token):
     """Versão enxuta: só responde se há (ou não) contato autorizado ativo agora, sem os demais dados do advogado."""
-    processo = Processo.query.filter_by(token_cliente=token, status='ativo').first()
-
-    db.session.add(AcessoPublicoLog(
-        processo_id=processo.id if processo else None,
-        acao='consultou_ativo',
-        ip=_ip_requisicao()
-    ))
-    db.session.commit()
-
+    permitido, espera = _limite_link_seguro(token)
+    if not permitido:
+        return jsonify({'erro': f'Muitas solicitações. Tente novamente em {espera} segundos.'}), 429
+    processo = _processo_do_link(token)
     if not processo:
-        return jsonify({'valido': False, 'mensagem': 'Link inválido ou expirado.'}), 404
+        return jsonify(MENSAGEM_LINK_INVALIDO), 404
+
+    db.session.add(AcessoPublicoLog(processo_id=processo.id, acao='consultou_ativo', ip=_ip_requisicao()))
+    db.session.commit()
 
     agora = agora_utc()
     cca_ativo = ContatoSeguro.query.filter_by(processo_id=processo.id, status='ativo') \
@@ -3652,27 +3713,26 @@ def cliente_publico_contato_ativo(token):
 @app.route('/api/cliente-publico/analisar-golpe/<token>', methods=['POST'])
 def cliente_publico_analisar_golpe(token):
     """
-    permitido, espera = verificar_limite_acao('cliente-publico-link-seguro', 60, 60)
-    if not permitido:
-        return jsonify({'erro': f'Muitas solicitações. Tente novamente em {espera} segundos.'}), 429
     IA Anti-Golpe já vinculada ao token do cliente (em vez do endpoint genérico
     /api/ia/analisar-golpe) — assim a tentativa suspeita de alto risco já é
     registrada automaticamente no processo correto, sem o cliente precisar
     informar nenhum código.
     """
-    permitido, espera = verificar_limite_acao('cliente-publico-link-seguro', 60, 60)
-    if not permitido:
-        return jsonify({'erro': f'Muitas solicitações. Tente novamente em {espera} segundos.'}), 429
-    processo = Processo.query.filter_by(token_cliente=token, status='ativo').first()
-    if not processo:
-        return jsonify({'valido': False, 'mensagem': 'Link inválido ou expirado.'}), 404
-
     data = request.get_json() or {}
-    texto_mensagem = data.get('texto_mensagem', '')
+    texto_mensagem, erro = _campo_texto_publico(data, 'texto_mensagem', LIMITE_TEXTO_ANALISE)
+    if erro:
+        return jsonify({'erro': erro}), 400
     pediu_pagamento = bool(data.get('pediu_pagamento', False))
     canal = _canal_da_requisicao(data)
     if not canal:
         return jsonify({'erro': MENSAGEM_CANAL_INVALIDO}), 400
+
+    permitido, espera = _limite_link_seguro(token, escrita=True)
+    if not permitido:
+        return jsonify({'erro': f'Muitas solicitações. Tente novamente em {espera} segundos.'}), 429
+    processo = _processo_do_link(token)
+    if not processo:
+        return jsonify(MENSAGEM_LINK_INVALIDO), 404
 
     if not texto_mensagem and not pediu_pagamento:
         return jsonify({'erro': 'Cole a mensagem recebida para analisar.'}), 400
@@ -3706,8 +3766,13 @@ def verificar_contato_publico():
     if not permitido:
         return jsonify({'erro': f'Muitas verificações. Tente novamente em {espera} segundos.'}), 429
     data = request.get_json() or {}
-    numero = ''.join(filter(str.isdigit, (data.get('numero') or ''))) 
-    codigo = (data.get('codigo') or '').strip().upper()
+    numero_bruto, erro_numero = _campo_texto_publico(data, 'numero', 40)
+    codigo, erro_codigo = _campo_texto_publico(data, 'codigo', LIMITE_CODIGO_PROCESSO)
+    descricao, erro_descricao = _campo_texto_publico(data, 'descricao', LIMITE_DESCRICAO_PUBLICA)
+    if erro_numero or erro_codigo or erro_descricao:
+        return jsonify({'erro': erro_numero or erro_codigo or erro_descricao}), 400
+    numero = ''.join(filter(str.isdigit, numero_bruto))[:LIMITE_NUMERO_PUBLICO]
+    codigo = codigo.strip().upper()
     canal = _canal_da_requisicao(data)
     if not canal:
         return jsonify({'erro': MENSAGEM_CANAL_INVALIDO}), 400
@@ -3746,7 +3811,7 @@ def verificar_contato_publico():
             processo_id=processo.id,
             numero_suspeito=numero,
             canal=canal,
-            descricao=data.get('descricao', ''),
+            descricao=descricao,
             confirmado_golpe=False
         )
         db.session.add(tentativa)
@@ -3852,21 +3917,28 @@ def analisar_golpe():
     if not permitido:
         return jsonify({'erro': f'Muitas análises. Tente novamente em {espera} segundos.'}), 429
     data = request.get_json() or {}
-    texto_mensagem = data.get('texto_mensagem', '')
-    numero_suspeito = data.get('numero_suspeito', '')
+    texto_mensagem, erro_texto = _campo_texto_publico(data, 'texto_mensagem', LIMITE_TEXTO_ANALISE)
+    numero_suspeito, erro_numero = _campo_texto_publico(data, 'numero_suspeito', LIMITE_NUMERO_PUBLICO)
+    codigo_processo, erro_codigo = _campo_texto_publico(data, 'codigo_processo', LIMITE_CODIGO_PROCESSO)
+    if erro_texto or erro_numero or erro_codigo:
+        return jsonify({'erro': erro_texto or erro_numero or erro_codigo}), 400
     canal = _canal_da_requisicao(data)
     if not canal:
         return jsonify({'erro': MENSAGEM_CANAL_INVALIDO}), 400
     pediu_pagamento = bool(data.get('pediu_pagamento', False))
-    codigo_processo = data.get('codigo_processo', '')
 
     if not texto_mensagem and not pediu_pagamento:
         return jsonify({'erro': 'Informe o texto da mensagem recebida ou marque se houve pedido de pagamento.'}), 400
 
     numero_oficial_bate = None
     processo = None
+    codigo_processo = codigo_processo.strip().upper()
     if codigo_processo:
-        processo = Processo.query.filter_by(codigo_unico=codigo_processo.strip().upper(), status='ativo').first()
+        # Por código, qualquer que seja o IP: limita a gravação de tentativas no mesmo processo.
+        permitido, espera = verificar_limite_acao(f'ia-publica:{codigo_processo}', 20, 600, por_ip=False)
+        if not permitido:
+            return jsonify({'erro': f'Muitas análises. Tente novamente em {espera} segundos.'}), 429
+        processo = Processo.query.filter_by(codigo_unico=codigo_processo, status='ativo').first()
     if processo and processo.advogado and numero_suspeito:
         numero_digitos = ''.join(filter(str.isdigit, numero_suspeito))
         oficial_digitos = ''.join(filter(str.isdigit, processo.advogado.telefone_oficial))

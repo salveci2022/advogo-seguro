@@ -235,8 +235,24 @@ def test_verificacao_publica_limitada_por_codigo_mesmo_variando_ip(client, no_re
 
 # ---------- logs pseudonimizados ----------
 
+def token_de_link_valido(client):
+    """Desde o APPSEC-012, acesso com token inválido não grava log; o teste usa um link real."""
+    resp = client.post('/api/escritorio/registro', json={'nome': 'Esc Log', 'email': 'log@x.com', 'senha': SENHA})
+    he = {'Authorization': f"Bearer {resp.get_json()['token']}"}
+    with appmodule.app.app_context():
+        e = appmodule.Escritorio.query.filter_by(email='log@x.com').one()
+        e.plano, e.plano_expira = 'profissional', None
+        appmodule.db.session.commit()
+    adv = client.post('/api/escritorio/advogados', json={'nome': 'Dra', 'telefone_oficial': '61911110000'},
+                      headers=he).get_json()['id']
+    proc = client.post('/api/escritorio/processos', json={
+        'advogado_id': adv, 'cliente_nome': 'Cliente', 'cliente_telefone': '61933332222'}, headers=he).get_json()
+    return proc['link_cliente_seguro'].rsplit('/', 1)[-1]
+
+
 def test_logs_usam_cf_connecting_ip_pseudonimizado(client, no_render):
-    client.get('/api/cliente-publico/contato-ativo/token-inexistente',
+    token = token_de_link_valido(client)
+    client.get(f'/api/cliente-publico/contato-ativo/{token}',
                headers={'CF-Connecting-IP': '198.51.100.77', 'X-Forwarded-For': '6.6.6.6'},
                environ_base={'REMOTE_ADDR': IP_LB})
     with appmodule.app.app_context():
@@ -246,7 +262,8 @@ def test_logs_usam_cf_connecting_ip_pseudonimizado(client, no_render):
 
 
 def test_logs_locais_usam_remote_addr_pseudonimizado(client, local):
-    client.get('/api/cliente-publico/contato-ativo/token-inexistente',
+    token = token_de_link_valido(client)
+    client.get(f'/api/cliente-publico/contato-ativo/{token}',
                headers={'CF-Connecting-IP': '198.51.100.77', 'X-Forwarded-For': '6.6.6.6'},
                environ_base={'REMOTE_ADDR': '192.0.2.30'})
     with appmodule.app.app_context():
