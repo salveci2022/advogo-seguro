@@ -2568,6 +2568,21 @@ LABEL_CANAL = {
     'videochamada': 'videochamada',
     'email': 'e-mail'
 }
+MENSAGEM_CANAL_INVALIDO = 'Canal inválido. Use whatsapp, ligacao, videochamada ou email.'
+
+
+def _canal_da_requisicao(data):
+    """Canal informado na requisição, só dentre CANAIS_VALIDOS (ausente = whatsapp). None se inválido.
+
+    O canal é exibido no painel do escritório; nunca persistir valor arbitrário (APPSEC-002).
+    """
+    valor = data.get('canal')
+    if valor is None or valor == '':
+        return 'whatsapp'
+    if not isinstance(valor, str):
+        return None
+    valor = valor.strip().lower()
+    return valor if valor in CANAIS_VALIDOS else None
 
 
 def _serializar_cca_escritorio(c, titulares=None):
@@ -3138,6 +3153,9 @@ def contato_seguro_verificar():
     """
     data = request.get_json() or {}
     pediu_pagamento = bool(data.get('pediu_pagamento', False))
+    canal = _canal_da_requisicao(data)
+    if not canal:
+        return jsonify({'erro': MENSAGEM_CANAL_INVALIDO}), 400
 
     agora = agora_utc()
     contato = ContatoSeguro.query.filter_by(cliente_id=request.cliente.id, status='ativo') \
@@ -3179,7 +3197,7 @@ def contato_seguro_verificar():
         if processo_ref:
             db.session.add(TentativaContato(
                 processo_id=processo_ref.id,
-                canal=data.get('canal', 'whatsapp'),
+                canal=canal,
                 descricao='Cliente verificou Contato Seguro e NÃO havia CCA ativo no momento.',
                 confirmado_golpe=pediu_pagamento
             ))
@@ -3193,6 +3211,9 @@ def contato_seguro_verificar():
 def contato_seguro_registrar_suspeita():
     """Botão 'Registrar tentativa suspeita' na área do cliente — não exige contato ativo nem dados sensíveis."""
     data = request.get_json() or {}
+    canal = _canal_da_requisicao(data)
+    if not canal:
+        return jsonify({'erro': MENSAGEM_CANAL_INVALIDO}), 400
     processo_ref = Processo.query.filter_by(cliente_id=request.cliente.id).order_by(Processo.criado_em.desc()).first()
     if not processo_ref:
         return jsonify({'erro': 'Nenhum processo vinculado ao seu cadastro para registrar a tentativa.'}), 404
@@ -3200,7 +3221,7 @@ def contato_seguro_registrar_suspeita():
     db.session.add(TentativaContato(
         processo_id=processo_ref.id,
         numero_suspeito=data.get('numero', ''),
-        canal=data.get('canal', 'whatsapp'),
+        canal=canal,
         descricao=data.get('descricao', 'Tentativa suspeita registrada pelo cliente via Contato Seguro.'),
         confirmado_golpe=True
     ))
@@ -3218,7 +3239,9 @@ def verificar_contato():
     data = request.get_json() or {}
     numero = ''.join(filter(str.isdigit, (data.get('numero') or ''))) 
     codigo = (data.get('codigo') or '').strip().upper()
-    canal = data.get('canal', 'whatsapp')
+    canal = _canal_da_requisicao(data)
+    if not canal:
+        return jsonify({'erro': MENSAGEM_CANAL_INVALIDO}), 400
     pediu_pagamento = data.get('pediu_pagamento', False)
 
     processo = None
@@ -3353,6 +3376,9 @@ def registrar_alerta_publico(token):
     processo = Processo.query.filter_by(token_cliente=token, status='ativo').first()
     data = request.get_json() or {}
     tipo = data.get('tipo', 'nao_reconheco')  # nao_reconheco | pix | suspeita_geral
+    canal = _canal_da_requisicao(data)
+    if not canal:
+        return jsonify({'erro': MENSAGEM_CANAL_INVALIDO}), 400
 
     db.session.add(AcessoPublicoLog(
         processo_id=processo.id if processo else None,
@@ -3364,7 +3390,7 @@ def registrar_alerta_publico(token):
         db.session.add(TentativaContato(
             processo_id=processo.id,
             numero_suspeito=data.get('numero', ''),
-            canal=data.get('canal', 'whatsapp'),
+            canal=canal,
             descricao=data.get('descricao') or f'Alerta registrado pelo cliente via link seguro ({tipo}).',
             confirmado_golpe=False
         ))
@@ -3445,6 +3471,9 @@ def cliente_publico_analisar_golpe(token):
     data = request.get_json() or {}
     texto_mensagem = data.get('texto_mensagem', '')
     pediu_pagamento = bool(data.get('pediu_pagamento', False))
+    canal = _canal_da_requisicao(data)
+    if not canal:
+        return jsonify({'erro': MENSAGEM_CANAL_INVALIDO}), 400
 
     if not texto_mensagem and not pediu_pagamento:
         return jsonify({'erro': 'Cole a mensagem recebida para analisar.'}), 400
@@ -3455,7 +3484,7 @@ def cliente_publico_analisar_golpe(token):
     if resultado['pontuacao'] >= 45:
         db.session.add(TentativaContato(
             processo_id=processo.id,
-            canal=data.get('canal', 'whatsapp'),
+            canal=canal,
             descricao=f"[IA Anti-Golpe via link seguro — risco {resultado['risco']}] {texto_mensagem[:400]}",
             confirmado_golpe=(resultado['pontuacao'] >= 70)
         ))
@@ -3480,7 +3509,9 @@ def verificar_contato_publico():
     data = request.get_json() or {}
     numero = ''.join(filter(str.isdigit, (data.get('numero') or ''))) 
     codigo = (data.get('codigo') or '').strip().upper()
-    canal = data.get('canal', 'whatsapp')
+    canal = _canal_da_requisicao(data)
+    if not canal:
+        return jsonify({'erro': MENSAGEM_CANAL_INVALIDO}), 400
     pediu_pagamento = data.get('pediu_pagamento', False)
 
     if not codigo:
@@ -3620,7 +3651,9 @@ def analisar_golpe():
     data = request.get_json() or {}
     texto_mensagem = data.get('texto_mensagem', '')
     numero_suspeito = data.get('numero_suspeito', '')
-    canal = data.get('canal', 'whatsapp')
+    canal = _canal_da_requisicao(data)
+    if not canal:
+        return jsonify({'erro': MENSAGEM_CANAL_INVALIDO}), 400
     pediu_pagamento = bool(data.get('pediu_pagamento', False))
     codigo_processo = data.get('codigo_processo', '')
 

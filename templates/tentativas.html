@@ -73,7 +73,8 @@ function escapeHtml(str) {
 
 function canalLabel(c) {
   const m = { whatsapp: '💬 WhatsApp', ligacao: '📞 Ligação', videochamada: '🎥 Videochamada', email: '✉️ E-mail' };
-  return m[c] || (c || '—');
+  // Valor fora da lista é dado do usuário: nunca vai bruto para innerHTML (APPSEC-002).
+  return m[c] || escapeHtml(c || '—');
 }
 
 async function carregarTentativas() {
