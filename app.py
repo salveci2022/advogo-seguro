@@ -29,7 +29,7 @@ from flask_cors import CORS
 from sqlalchemy import event, inspect, text, func
 from sqlalchemy.orm import joinedload
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from werkzeug.exceptions import HTTPException
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
@@ -1077,13 +1077,50 @@ def _versao_credencial(senha_hash):
     return hashlib.sha256((senha_hash or '').encode('utf-8')).hexdigest()[:24]
 
 
+# APPSEC-004: o formato antigo CCA-NNNN (10 mil códigos, únicos para sempre) esgotava e
+# travava a geração. Os registros antigos continuam válidos e exibidos como estão.
+CCA_ALFABETO = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'  # sem 0 O 1 I L
+CCA_TAMANHO = 8
+CCA_MAX_TENTATIVAS = 5
+CCA_LIMITE_POR_MINUTO = 30
+MENSAGEM_CCA_INDISPONIVEL = 'Não foi possível gerar o código agora. Tente novamente em instantes.'
+
+
 def gerar_codigo_cca():
-    """Gera um código curto único no formato CCA-NNNN, só visível ao escritório."""
-    while True:
-        numero = ''.join(secrets.choice(string.digits) for _ in range(4))
-        codigo = f'CCA-{numero}'
-        if not ContatoSeguro.query.filter_by(codigo_cca=codigo).first():
-            return codigo
+    """Gera um código aleatório no formato CCA-XXXX-XXXX (31^8 ≈ 8,5 x 10^11), só visível ao escritório."""
+    aleatorio = ''.join(secrets.choice(CCA_ALFABETO) for _ in range(CCA_TAMANHO))
+    return f'CCA-{aleatorio[:4]}-{aleatorio[4:]}'
+
+
+def _codigo_cca_em_uso(codigo):
+    return db.session.query(ContatoSeguro.id).filter_by(codigo_cca=codigo).first() is not None
+
+
+def _salvar_novo_cca(campos, antes_de_inserir=None):
+    """Grava um ContatoSeguro ativo com código novo. Retorna o contato, ou None após CCA_MAX_TENTATIVAS.
+
+    Cada tentativa é uma transação completa: se o INSERT colidir com outra requisição, o
+    rollback desfaz tudo (inclusive o que antes_de_inserir alterou) e a tentativa seguinte refaz.
+    """
+    for _ in range(CCA_MAX_TENTATIVAS):
+        codigo = gerar_codigo_cca()
+        if _codigo_cca_em_uso(codigo):
+            continue
+        if antes_de_inserir:
+            antes_de_inserir()
+        contato = ContatoSeguro(
+            codigo_cca=codigo, status='ativo',
+            expira_em=agora_utc() + timedelta(minutes=CONTATO_SEGURO_TTL_MINUTOS), **campos
+        )
+        db.session.add(contato)
+        try:
+            db.session.commit()
+            return contato
+        except IntegrityError:
+            db.session.rollback()
+            app.logger.warning('[CCA] colisao_codigo escritorio_id=%s', campos['escritorio_id'])
+    app.logger.error('[CCA] tentativas_esgotadas escritorio_id=%s', campos['escritorio_id'])
+    return None
 
 
 def gerar_codigo_unico():
@@ -2613,6 +2650,11 @@ def iniciar_contato_seguro():
     """
     if not request.escritorio.plano_ativo():
         return jsonify({'erro': 'Plano inativo. Regularize o acesso para continuar.'}), 403
+    permitido, espera = verificar_limite_acao(
+        f'cca-iniciar:{request.escritorio.id}', CCA_LIMITE_POR_MINUTO, 60
+    )
+    if not permitido:
+        return jsonify({'erro': f'Muitas solicitações. Tente novamente em {espera} segundos.'}), 429
 
     data = request.get_json() or {}
     advogado_id = data.get('advogado_id')
@@ -2647,30 +2689,30 @@ def iniciar_contato_seguro():
     if not processo:
         processo = vinculo
 
-    # cancela automaticamente qualquer CCA ainda ativo deste advogado com este cliente,
-    # para nunca haver dois códigos simultâneos válidos
-    cancelado_em = agora_utc()
-    ContatoSeguro.query.filter_by(
-        escritorio_id=request.escritorio.id, advogado_id=advogado.id,
-        cliente_id=cliente.id, status='ativo'
-    ).update(
-        {'status': 'cancelado', 'cancelado_em': cancelado_em},
-        synchronize_session=False
-    )
+    escritorio_id = request.escritorio.id
+    campos = {
+        'escritorio_id': escritorio_id,
+        'advogado_id': advogado.id,
+        'cliente_id': cliente.id,
+        'processo_id': processo.id if processo else None,
+        'canal': canal,
+        'observacao': observacao,
+    }
 
-    contato = ContatoSeguro(
-        escritorio_id=request.escritorio.id,
-        advogado_id=advogado.id,
-        cliente_id=cliente.id,
-        processo_id=processo.id if processo else None,
-        codigo_cca=gerar_codigo_cca(),
-        canal=canal,
-        status='ativo',
-        observacao=observacao,
-        expira_em=agora_utc() + timedelta(minutes=CONTATO_SEGURO_TTL_MINUTOS)
-    )
-    db.session.add(contato)
-    db.session.commit()
+    def cancelar_ativos_anteriores():
+        # cancela automaticamente qualquer CCA ainda ativo deste advogado com este cliente,
+        # para nunca haver dois códigos simultâneos válidos
+        ContatoSeguro.query.filter_by(
+            escritorio_id=escritorio_id, advogado_id=campos['advogado_id'],
+            cliente_id=campos['cliente_id'], status='ativo'
+        ).update(
+            {'status': 'cancelado', 'cancelado_em': agora_utc()},
+            synchronize_session=False
+        )
+
+    contato = _salvar_novo_cca(campos, cancelar_ativos_anteriores)
+    if not contato:
+        return jsonify({'erro': MENSAGEM_CCA_INDISPONIVEL}), 503
 
     return jsonify(_serializar_cca_escritorio(contato))
 
@@ -2709,27 +2751,32 @@ def reiniciar_contato_seguro(contato_id):
     """Cancela o CCA antigo e gera um novo, com nova validade de 10 minutos (Sprint 3)."""
     if not request.escritorio.plano_ativo():
         return jsonify({'erro': 'Plano inativo. Regularize o acesso para continuar.'}), 403
+    permitido, espera = verificar_limite_acao(
+        f'cca-reiniciar:{request.escritorio.id}', CCA_LIMITE_POR_MINUTO, 60
+    )
+    if not permitido:
+        return jsonify({'erro': f'Muitas solicitações. Tente novamente em {espera} segundos.'}), 429
     antigo = ContatoSeguro.query.filter_by(id=contato_id, escritorio_id=request.escritorio.id).first()
     if not antigo:
         return jsonify({'erro': 'Contato seguro não encontrado.'}), 404
 
-    if antigo.status_atual() == 'ativo':
-        antigo.status = 'cancelado'
-        antigo.cancelado_em = agora_utc()
+    campos = {
+        'escritorio_id': antigo.escritorio_id,
+        'advogado_id': antigo.advogado_id,
+        'cliente_id': antigo.cliente_id,
+        'processo_id': antigo.processo_id,
+        'canal': antigo.canal,
+        'observacao': antigo.observacao,
+    }
 
-    novo = ContatoSeguro(
-        escritorio_id=antigo.escritorio_id,
-        advogado_id=antigo.advogado_id,
-        cliente_id=antigo.cliente_id,
-        processo_id=antigo.processo_id,
-        codigo_cca=gerar_codigo_cca(),
-        canal=antigo.canal,
-        status='ativo',
-        observacao=antigo.observacao,
-        expira_em=agora_utc() + timedelta(minutes=CONTATO_SEGURO_TTL_MINUTOS)
-    )
-    db.session.add(novo)
-    db.session.commit()
+    def cancelar_antigo():
+        if antigo.status_atual() == 'ativo':
+            antigo.status = 'cancelado'
+            antigo.cancelado_em = agora_utc()
+
+    novo = _salvar_novo_cca(campos, cancelar_antigo)
+    if not novo:
+        return jsonify({'erro': MENSAGEM_CCA_INDISPONIVEL}), 503
     return jsonify(_serializar_cca_escritorio(novo))
 
 
