@@ -131,6 +131,8 @@ def test_sincronizacao_ativa_plano_pago_sem_periodo_gratuito(client, monkeypatch
             customer='cus_paga',
             status='active',
             metadata={'escritorio_id': str(escritorio_id), 'plano': 'escritorio'},
+            # APPSEC-007: o plano vem do price.id cobrado.
+            items={'data': [{'price': {'id': 'price_mensal'}}]},
         )
     )
 
@@ -172,12 +174,14 @@ def test_webhook_stripe_ativo_e_idempotente(client, monkeypatch):
 
     monkeypatch.setattr(appmodule, 'STRIPE_SECRET_KEY', 'sk_test_segura')
     monkeypatch.setattr(appmodule, 'STRIPE_WEBHOOK_SECRET', 'whsec_teste')
+    monkeypatch.setattr(appmodule, 'STRIPE_PRICE_MAP', {'escritorio': {'mensal': 'price_escritorio'}})
     evento = {
         'id': 'evt_assinatura_ativa',
         'type': 'customer.subscription.updated',
         'data': {'object': {
             'id': 'sub_ativa', 'customer': 'cus_ativa', 'status': 'active',
             'metadata': {'escritorio_id': str(escritorio_id), 'plano': 'escritorio'},
+            'items': {'data': [{'price': {'id': 'price_escritorio'}}]},
         }},
     }
     monkeypatch.setattr(appmodule.stripe.Webhook, 'construct_event', lambda *args, **kwargs: evento)

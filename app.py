@@ -4173,10 +4173,41 @@ def _url_publica_obrigatoria():
     return base
 
 
+def _plano_por_price_id():
+    """Mapa reverso price.id -> plano, montado só com os preços configurados no servidor."""
+    return {precos['mensal']: plano for plano, precos in STRIPE_PRICE_MAP.items() if precos.get('mensal')}
+
+
+def _price_ids_da_assinatura(assinatura):
+    itens = _valor_objeto(_valor_objeto(assinatura, 'items', {}) or {}, 'data', []) or []
+    ids = []
+    for item in itens:
+        preco = _valor_objeto(item, 'price')
+        preco_id = preco if isinstance(preco, str) else _valor_objeto(preco, 'id')
+        ids.append(str(preco_id or '').strip())
+    return ids
+
+
 def _plano_da_assinatura(assinatura):
+    """APPSEC-007: o plano vem do price.id efetivamente cobrado, não da metadata.
+
+    Retorna None (nenhum plano) se a assinatura não tiver itens, tiver algum preço que o
+    servidor não reconhece ou preços de planos diferentes. metadata.plano é só contexto:
+    se divergir do preço, vale o preço e a divergência fica registrada.
+    """
+    mapa = _plano_por_price_id()
+    planos = {mapa.get(preco_id) for preco_id in _price_ids_da_assinatura(assinatura)}
+    if len(planos) != 1 or None in planos:
+        return None
+    plano = planos.pop()
     metadata = _valor_objeto(assinatura, 'metadata', {}) or {}
-    codigo = normalizar_codigo_plano(_valor_objeto(metadata, 'plano'))
-    return codigo if codigo in {'profissional', 'escritorio', 'blindagem'} else None
+    plano_metadata = _valor_objeto(metadata, 'plano')
+    if plano_metadata and normalizar_codigo_plano(plano_metadata) != plano:
+        app.logger.warning(
+            '[STRIPE] plano_divergente assinatura=%s metadata=%s preco=%s; vale o preco',
+            _valor_objeto(assinatura, 'id'), normalizar_codigo_plano(plano_metadata), plano,
+        )
+    return plano
 
 
 def _subscription_id_da_fatura(fatura):
@@ -4220,10 +4251,26 @@ def _sincronizar_assinatura_stripe(assinatura):
     assinatura_id = str(_valor_objeto(assinatura, 'id') or '').strip()
     customer_id = str(_valor_objeto(assinatura, 'customer') or '').strip()
     status = str(_valor_objeto(assinatura, 'status') or '').strip().lower()
-    plano = _plano_da_assinatura(assinatura) or escritorio.plano_pretendido
+    plano = _plano_da_assinatura(assinatura)
 
-    if plano not in {'profissional', 'escritorio', 'blindagem'}:
-        raise ValueError('Plano Stripe ausente ou inválido na assinatura.')
+    if assinatura_id:
+        escritorio.stripe_subscription_id = assinatura_id
+    if customer_id:
+        escritorio.stripe_customer_id = customer_id
+    escritorio.assinatura_status = status or 'incomplete'
+
+    if plano is None:
+        # Preço desconhecido, ausente ou ambíguo: falha fechada, nenhum plano é concedido.
+        # O evento é aceito (o Stripe não reenvia indefinidamente) e fica registrado no log.
+        app.logger.error(
+            '[STRIPE] preco_nao_reconhecido escritorio_id=%s assinatura=%s; acesso bloqueado',
+            escritorio.id, assinatura_id,
+        )
+        escritorio.plano = 'cancelado'
+        escritorio.plano_expira = agora_utc()
+        db.session.commit()
+        return escritorio
+
     if escritorio.eh_pessoa_fisica() and plano != 'profissional':
         # Não recusa o evento (o Stripe reenviaria indefinidamente); apenas
         # impede que a conta PF seja tratada como plano empresarial.
@@ -4232,12 +4279,7 @@ def _sincronizar_assinatura_stripe(assinatura):
             escritorio.id, plano,
         )
         plano = 'profissional'
-    if assinatura_id:
-        escritorio.stripe_subscription_id = assinatura_id
-    if customer_id:
-        escritorio.stripe_customer_id = customer_id
     escritorio.plano_pretendido = plano
-    escritorio.assinatura_status = status or 'incomplete'
 
     if status == 'trialing':
         fim_teste = _data_stripe(_valor_objeto(assinatura, 'trial_end'))
