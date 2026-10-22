@@ -19,6 +19,7 @@ import string
 import smtplib
 import ssl
 import sqlite3
+import threading
 from email.message import EmailMessage
 from xml.sax.saxutils import escape as xml_escape
 from datetime import datetime, timedelta, timezone
@@ -1130,6 +1131,27 @@ def hash_senha(senha):
     return generate_password_hash(senha, method='pbkdf2:sha256', salt_length=16)
 
 
+# APPSEC-011: login de conta inexistente também calcula um PBKDF2, para o tempo de resposta
+# não revelar se o e-mail/telefone está cadastrado.
+_HASH_SENHA_FICTICIA = hash_senha(secrets.token_urlsafe(24))
+
+
+def _senha_confere(registro, senha):
+    """Confere a senha com o mesmo custo exista o registro ou não."""
+    hash_salvo = registro.senha_hash if registro else _HASH_SENHA_FICTICIA
+    return verificar_senha(hash_salvo, senha) and registro is not None
+
+
+def _em_segundo_plano(funcao, *args, descricao='tarefa'):
+    """APPSEC-011: envia e-mail fora da requisição para o tempo de resposta não revelar se a conta existe."""
+    def executar():
+        try:
+            funcao(*args)
+        except Exception:  # noqa: BLE001 - a thread nunca deve morrer em silêncio
+            app.logger.exception('Falha em segundo plano: %s', descricao)
+    threading.Thread(target=executar, daemon=True).start()
+
+
 def verificar_senha(senha_hash_salva, senha_digitada):
     """
     Confere a senha contra o hash salvo.
@@ -1480,14 +1502,13 @@ def esqueci_senha_escritorio():
             return jsonify({'erro': 'A recuperação de senha está temporariamente indisponível. Entre em contato com o suporte SPYNET.'}), 503
         link_absoluto = f'{base_publica}{caminho}'
 
-        enviado = False
-        try:
-            enviado = enviar_email_redefinicao_escritorio(escritorio.email, link_absoluto)
-        except Exception as erro:
-            app.logger.exception('Falha ao enviar e-mail de redefinição para escritório %s: %s', escritorio.id, erro)
+        _em_segundo_plano(
+            enviar_email_redefinicao_escritorio, escritorio.email, link_absoluto,
+            descricao=f'e-mail de redefinição do escritório {escritorio.id}',
+        )
 
-        # Ajuda apenas no desenvolvimento local. Nunca expõe o token em produção.
-        if not IS_PRODUCTION and not enviado:
+        # Ajuda apenas no desenvolvimento local sem SMTP. Nunca expõe o token em produção.
+        if not IS_PRODUCTION and not _smtp_configurado():
             resposta['link_dev'] = caminho
 
     return jsonify(resposta)
@@ -1780,6 +1801,12 @@ def registro_escritorio_comercial():
     return _registrar_escritorio_comercial(request.get_json(silent=True) or {})
 
 
+MENSAGEM_CONFIRMACAO_INVALIDA = (
+    'Não foi possível confirmar o cadastro. Confira o código recebido ou solicite um novo. '
+    'Se o e-mail já foi confirmado, faça login.'
+)
+
+
 @app.route('/api/comercial/confirmar-email', methods=['POST'])
 def confirmar_email_comercial():
     data = request.get_json(silent=True) or {}
@@ -1799,21 +1826,20 @@ def confirmar_email_comercial():
     if not email or len(codigo) != 6:
         return jsonify({'erro': 'Informe o e-mail e o código de 6 dígitos.'}), 400
 
+    # APPSEC-011: e-mail inexistente, já confirmado, código expirado ou errado recebem a mesma
+    # resposta. Conta já confirmada nunca recebe sessão aqui: só entra por login e senha.
     escritorio = Escritorio.query.filter_by(email=email).first()
-    if not escritorio or not escritorio.email_confirmacao_obrigatoria:
-        return jsonify({'erro': 'Não foi possível confirmar este cadastro.'}), 400
-    if escritorio.email_confirmado_em:
-        # Nunca emitir sessão aqui: conta já confirmada só entra por login e senha.
-        return jsonify({
-            'erro': 'Não foi possível confirmar este cadastro. Se o e-mail já foi confirmado, faça login.'
-        }), 400
-    if not escritorio.email_confirmacao_expira or escritorio.email_confirmacao_expira <= agora_utc():
-        return jsonify({'erro': 'O código expirou. Solicite um novo código.'}), 400
-    if not escritorio.email_confirmacao_token_hash or not hmac.compare_digest(
-        escritorio.email_confirmacao_token_hash,
-        _hash_codigo_confirmacao(codigo),
-    ):
-        return jsonify({'erro': 'Código de confirmação inválido.'}), 400
+    codigo_valido = bool(
+        escritorio
+        and escritorio.email_confirmacao_obrigatoria
+        and not escritorio.email_confirmado_em
+        and escritorio.email_confirmacao_expira
+        and escritorio.email_confirmacao_expira > agora_utc()
+        and escritorio.email_confirmacao_token_hash
+        and hmac.compare_digest(escritorio.email_confirmacao_token_hash, _hash_codigo_confirmacao(codigo))
+    )
+    if not codigo_valido:
+        return jsonify({'erro': MENSAGEM_CONFIRMACAO_INVALIDA}), 400
 
     escritorio.email_confirmado_em = agora_utc()
     escritorio.email_confirmacao_token_hash = None
@@ -1860,12 +1886,11 @@ def reenviar_confirmacao_comercial():
     )
     db.session.commit()
 
-    try:
-        email_enviado = enviar_email_confirmacao_escritorio(email, codigo)
-    except (OSError, smtplib.SMTPException):
-        email_enviado = False
-        app.logger.exception('Falha ao reenviar confirmação para escritorio_id=%s.', escritorio.id)
-    resposta_padrao['email_enviado'] = email_enviado
+    # Mesmo formato de resposta exista o cadastro ou não; o envio não atrasa a resposta (APPSEC-011).
+    _em_segundo_plano(
+        enviar_email_confirmacao_escritorio, email, codigo,
+        descricao=f'reenvio de confirmação do escritório {escritorio.id}',
+    )
     if not IS_PRODUCTION:
         resposta_padrao['codigo_dev'] = codigo
     return jsonify(resposta_padrao)
@@ -1912,7 +1937,7 @@ def login_escritorio():
         return jsonify({'erro': f'Muitas tentativas de login. Tente novamente em {espera} segundos.'}), 429
 
     escritorio = Escritorio.query.filter_by(email=email).first()
-    if not escritorio or not verificar_senha(escritorio.senha_hash, senha):
+    if not _senha_confere(escritorio, senha):
         registrar_falha_login(f'escritorio:{email}')
         return jsonify({'erro': 'Email ou senha incorretos'}), 401
 
@@ -2982,7 +3007,7 @@ def login_cliente():
         return jsonify({'erro': f'Muitas tentativas de login. Tente novamente em {espera} segundos.'}), 429
 
     cliente = Cliente.query.filter_by(telefone=telefone).first()
-    if not cliente or not verificar_senha(cliente.senha_hash, senha):
+    if not _senha_confere(cliente, senha):
         registrar_falha_login(f'cliente:{telefone}')
         return jsonify({'erro': 'Telefone ou senha incorretos'}), 401
     if not cliente.ativo:
