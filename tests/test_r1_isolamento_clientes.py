@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """R1: um escritório nunca recebe nome ou e-mail de cliente cadastrado por outro escritório.
 
-O cadastro do cliente é global (telefone único). Quando o escritório B cria um
-processo com o telefone de um cliente do escritório A, o vínculo continua
-permitido, mas B só vê o telefone que ele mesmo informou.
+O cadastro do cliente é global (telefone único). Desde o RR2 a API não cria mais
+vínculo entre escritórios; os vínculos legados são montados direto no banco de
+teste e B continua vendo só o telefone, nunca o nome ou o e-mail de A.
 """
-from conftest import appmodule
+from conftest import appmodule, criar_vinculo_legado
 
 TELEFONE = '61988880001'
 NOME_REAL = 'Maria Titular da Silva'
@@ -49,7 +49,7 @@ def cenario_dois_escritorios(client):
 
     hb = registrar(client, 'outro@escritorio-b.com')
     adv_b = criar_advogado(client, hb, '61922220000')
-    proc_b = criar_processo(client, hb, adv_b, 'Nome digitado por B', TELEFONE)
+    proc_b = criar_vinculo_legado(adv_b, TELEFONE)
     return ha, hb, proc_a, proc_b, adv_b
 
 
@@ -81,12 +81,15 @@ def textos_do_pdf(monkeypatch):
 # ---------- Exposição bloqueada ----------
 
 def test_criar_processo_com_telefone_de_outro_escritorio_nao_revela_nome(client):
-    _, _, proc_a, proc_b, _ = cenario_dois_escritorios(client)
+    cenario_dois_escritorios(client)
+    hc = registrar(client, 'terceiro@escritorio-c.com')
+    adv_c = criar_advogado(client, hc, '61944440000')
 
-    assert proc_b['cliente_id'] == proc_a['cliente_id']
-    assert proc_b['cliente_nome'] != NOME_REAL
-    assert proc_b['senha_temporaria'] is None
-    assert sem_dados_do_titular(str(proc_b))
+    resp = client.post('/api/escritorio/processos', json={
+        'advogado_id': adv_c, 'cliente_nome': 'Nome digitado por C', 'cliente_telefone': TELEFONE,
+    }, headers=hc)
+    assert resp.status_code == 409
+    assert sem_dados_do_titular(resp.get_data(as_text=True))
 
 
 def test_listas_do_outro_escritorio_nao_expoem_nome_nem_email(client):

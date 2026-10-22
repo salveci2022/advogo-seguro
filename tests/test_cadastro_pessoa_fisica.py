@@ -156,12 +156,15 @@ def test_pf_mudanca_externa_no_stripe_nao_vira_plano_empresarial(client, monkeyp
 
     monkeypatch.setattr(appmodule, 'STRIPE_SECRET_KEY', 'sk_test_segura')
     monkeypatch.setattr(appmodule, 'STRIPE_WEBHOOK_SECRET', 'whsec_teste')
+    monkeypatch.setattr(appmodule, 'STRIPE_PRICE_MAP', {'blindagem': {'mensal': 'price_blindagem'}})
     monkeypatch.setattr(appmodule.stripe.Webhook, 'construct_event', lambda *a, **k: {
         'id': 'evt_pf_upgrade',
         'type': 'customer.subscription.updated',
         'data': {'object': {
             'id': 'sub_pf', 'customer': 'cus_pf', 'status': 'active',
             'metadata': {'escritorio_id': str(escritorio_id), 'plano': 'blindagem'},
+            # APPSEC-007: preço Blindagem efetivamente cobrado numa conta PF.
+            'items': {'data': [{'price': {'id': 'price_blindagem'}}]},
         }},
     })
     resposta = client.post('/webhook/stripe', data=b'{}', headers={'Stripe-Signature': 'assinatura'})

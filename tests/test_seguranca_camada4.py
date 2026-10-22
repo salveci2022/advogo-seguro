@@ -3,7 +3,7 @@
 import hashlib
 import io
 
-from conftest import appmodule
+from conftest import appmodule, criar_vinculo_legado
 
 
 def registrar(client, email='seguranca@teste.com', senha='SenhaSegura123'):
@@ -117,10 +117,7 @@ def test_link_reset_cliente_e_post_e_bloqueia_compartilhado(client):
     b = registrar(client, 'b-seg@teste.com')
     hb = bearer(b)
     adv_b = criar_advogado(client, hb)
-    client.post('/api/escritorio/processos', json={
-        'advogado_id': adv_b, 'cliente_nome': 'Cliente Compartilhado',
-        'cliente_telefone': '61988880001'
-    }, headers=hb)
+    criar_vinculo_legado(adv_b, '61988880001')
 
     get_antigo = client.get(f"/api/escritorio/cliente/{proc_a['cliente_id']}/link-reset", headers=ha)
     assert get_antigo.status_code == 405
@@ -134,9 +131,7 @@ def test_cliente_compartilhado_nao_pode_ser_editado_por_um_escritorio(client):
         'advogado_id': adv_a, 'cliente_nome': 'Compartilhado', 'cliente_telefone': '61988880002'
     }, headers=ha).get_json()
     b = registrar(client, 'b2-seg@teste.com'); hb = bearer(b); adv_b = criar_advogado(client, hb)
-    client.post('/api/escritorio/processos', json={
-        'advogado_id': adv_b, 'cliente_nome': 'Compartilhado', 'cliente_telefone': '61988880002'
-    }, headers=hb)
+    criar_vinculo_legado(adv_b, '61988880002')
     edit = client.put(f"/api/escritorio/clientes/{p['cliente_id']}", json={'nome': 'Alterado'}, headers=ha)
     assert edit.status_code == 409
 

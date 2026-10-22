@@ -95,6 +95,11 @@ document.getElementById('formLoginCliente').addEventListener('submit', async (e)
       }
     });
     Auth.setSession(data.token, 'cliente', data.nome);
+    // APPSEC-005: senha recebida do escritório é temporária; a área abre só a troca de senha.
+    try {
+      if (data.troca_senha_obrigatoria) sessionStorage.setItem('advogo_troca_senha', '1');
+      else sessionStorage.removeItem('advogo_troca_senha');
+    } catch (_) {}
     window.location.href = '/cliente/area';
   } catch (err) {
     showAlert('alertaLogin', err.message, 'erro');

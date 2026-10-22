@@ -68,6 +68,7 @@ def criar_massa():
             telefone=f'6198{i:07d}',
             email=f'cliente{i}@teste.com',
             senha_hash=appmodule.hash_senha('TesteSenha123!'),
+            troca_senha_obrigatoria=False,  # cliente que já criou a senha pessoal (APPSEC-005)
         )
         db.session.add(c)
         db.session.flush()

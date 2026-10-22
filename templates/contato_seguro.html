@@ -266,7 +266,7 @@ function badgeStatusCca(status) {
 
 function canalLabel(c) {
   const m = { whatsapp: '💬 WhatsApp', ligacao: '📞 Ligação', videochamada: '🎥 Videochamada', email: '✉️ E-mail' };
-  return m[c] || c;
+  return m[c] || escapeHtml(c);
 }
 
 async function carregarHistorico() {
