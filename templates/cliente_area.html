@@ -142,6 +142,26 @@
   </div>
 
   <div class="panel">
+    <div class="panel-head"><h2>🤝 Autorizar escritório</h2></div>
+    <p class="helper-text">Use somente se um escritório pediu a sua autorização para cadastrar você. Informe o e-mail do escritório, confira o nome e entregue o código apenas a ele.</p>
+    <div id="alertaAutorizacao" class="alert-box"></div>
+    <form id="formAutorizacao">
+      <div class="form-group">
+        <label>E-mail do escritório</label>
+        <input type="email" class="form-control" id="autEmailEscritorio" required placeholder="contato@escritorio.com.br">
+      </div>
+      <div id="autConfirmacaoWrap" style="display:none;">
+        <p>Escritório: <strong id="autEscritorioNome"></strong></p>
+      </div>
+      <button type="submit" class="btn-spy btn-spy-primary" id="btnAutorizacao">Conferir escritório</button>
+    </form>
+    <div id="autCodigoWrap" style="display:none;">
+      <p>Código de autorização (uso único, válido por <span id="autValidade"></span> minutos):</p>
+      <div class="codigo" id="autCodigo"></div>
+    </div>
+  </div>
+
+  <div class="panel">
     <div class="panel-head"><h2>🔒 Alterar senha</h2></div>
     <div id="alertaSenhaCliente" class="alert-box"></div>
     <form id="formSenhaCliente">
@@ -334,6 +354,46 @@ document.getElementById('formVerificar').addEventListener('submit', async (e) =>
 });
 
 carregarProcessosCliente();
+
+let autorizacaoConferida = false;
+document.getElementById('autEmailEscritorio').addEventListener('input', () => {
+  autorizacaoConferida = false;
+  document.getElementById('autConfirmacaoWrap').style.display = 'none';
+  document.getElementById('autCodigoWrap').style.display = 'none';
+  document.getElementById('btnAutorizacao').textContent = 'Conferir escritório';
+});
+
+document.getElementById('formAutorizacao').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  hideAlert('alertaAutorizacao');
+  const btn = document.getElementById('btnAutorizacao');
+  const rotulo = autorizacaoConferida ? 'Autorizar este escritório' : 'Conferir escritório';
+  setLoading(btn, true, rotulo, 'Aguarde...');
+  try {
+    const data = await apiRequest('/api/cliente/autorizar-escritorio', {
+      method: 'POST',
+      body: {
+        email_escritorio: document.getElementById('autEmailEscritorio').value.trim(),
+        confirmar: autorizacaoConferida
+      }
+    });
+    document.getElementById('autEscritorioNome').textContent = data.escritorio_nome;
+    document.getElementById('autConfirmacaoWrap').style.display = 'block';
+    if (autorizacaoConferida) {
+      document.getElementById('autCodigo').textContent = data.codigo;
+      document.getElementById('autValidade').textContent = data.validade_minutos;
+      document.getElementById('autCodigoWrap').style.display = 'block';
+      autorizacaoConferida = false;
+      setLoading(btn, false, 'Conferir escritório');
+    } else {
+      autorizacaoConferida = true;
+      setLoading(btn, false, 'Autorizar este escritório');
+    }
+  } catch (err) {
+    showAlert('alertaAutorizacao', err.message, 'erro');
+    setLoading(btn, false, rotulo);
+  }
+});
 
 document.getElementById('formSenhaCliente').addEventListener('submit', async (e) => {
   e.preventDefault();

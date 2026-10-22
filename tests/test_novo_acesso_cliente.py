@@ -7,7 +7,7 @@ e o fluxo de redefinição POST /api/cliente/redefinir-senha.
 import hashlib
 from datetime import timedelta
 
-from conftest import appmodule
+from conftest import appmodule, criar_vinculo_legado
 
 NOVA_SENHA = 'NovaSenhaCliente123'
 
@@ -90,7 +90,10 @@ def test_impede_gerar_link_para_cliente_compartilhado(client):
     ha = registrar(client, 'comp-a@teste.com')
     proc = criar_processo(client, ha, '61977770003')
     hb = registrar(client, 'comp-b@teste.com')
-    criar_processo(client, hb, '61977770003')
+    adv_b = client.post('/api/escritorio/advogados', json={
+        'nome': 'Dra. B', 'telefone_oficial': '61999990009'
+    }, headers=hb).get_json()['id']
+    criar_vinculo_legado(adv_b, '61977770003')
 
     resp = gerar_link(client, ha, proc['cliente_id'])
     assert resp.status_code == 409

@@ -716,6 +716,28 @@ class EventoWebhook(db.Model):
     criado_em = db.Column(db.DateTime, default=agora_utc, nullable=False)
 
 
+class AutorizacaoVinculo(db.Model):
+    """RR2: autorização expressa do cliente para um escritório reaproveitar o cadastro dele.
+
+    Guarda só o hash do código. O código vale para um único escritório, expira e é
+    consumido uma única vez (UPDATE condicional), mesmo com requisições simultâneas.
+    """
+    __tablename__ = 'autorizacoes_vinculo'
+    __table_args__ = (
+        db.Index('ix_autorizacoes_cliente_criado', 'cliente_id', 'criado_em'),
+        db.Index('ix_autorizacoes_escritorio_cliente', 'escritorio_id', 'cliente_id'),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    cliente_id = db.Column(db.Integer, db.ForeignKey('clientes.id', ondelete='CASCADE'), nullable=False)
+    escritorio_id = db.Column(db.Integer, db.ForeignKey('escritorios.id', ondelete='CASCADE'), nullable=False)
+    codigo_hash = db.Column(db.String(64), unique=True, nullable=False)
+    criado_em = db.Column(db.DateTime, default=agora_utc, nullable=False)
+    expira_em = db.Column(db.DateTime, nullable=False)
+    usado_em = db.Column(db.DateTime)
+    processo_id = db.Column(db.Integer)  # processo criado com a autorização (somente auditoria)
+    cancelado_em = db.Column(db.DateTime)
+
+
 # ──────────────────────────────────────────────
 # MIGRAÇÃO SEGURA (adiciona colunas novas sem apagar dados existentes)
 # ──────────────────────────────────────────────
@@ -885,6 +907,81 @@ def _cliente_possui_processos_de_outro_escritorio(cliente_id, escritorio_id):
 
 
 CLIENTE_NOME_PROTEGIDO = 'Cliente vinculado a outro escritório'
+MENSAGEM_VINCULO_BLOQUEADO = (
+    'Este cliente já possui cadastro no ADVOGO SEGURO. Para realizar um novo vínculo com seu '
+    'escritório, solicite ao próprio cliente um código de autorização na área do cliente. Após '
+    'receber o código, informe-o no campo indicado para continuar.'
+)
+
+
+def _cliente_vinculado_ao_escritorio(cliente_id, escritorio_id):
+    return Processo.query.filter_by(cliente_id=cliente_id, escritorio_id=escritorio_id).first() is not None
+
+
+AUTORIZACAO_VINCULO_TTL_MINUTOS = 15
+AUTORIZACAO_VINCULO_MAX_POR_HORA = 5
+AUTORIZACAO_VINCULO_ALFABETO = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
+AUTORIZACAO_VINCULO_TAMANHO = 10
+
+
+def _normalizar_codigo_autorizacao(codigo):
+    return re.sub(r'[^A-Z0-9]', '', str(codigo or '').upper())
+
+
+def _hash_codigo_autorizacao(codigo):
+    """HMAC com a chave do servidor: um vazamento do banco não permite testar códigos offline."""
+    return hmac.new(
+        app.config['JWT_SECRET'].encode('utf-8'),
+        f'rr2-autorizacao-vinculo:{_normalizar_codigo_autorizacao(codigo)}'.encode('utf-8'),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _emitir_autorizacao_vinculo(cliente_id, escritorio_id):
+    """Cancela autorizações ativas do mesmo par e cria uma nova. Retorna (código, autorização)."""
+    agora = agora_utc()
+    AutorizacaoVinculo.query.filter(
+        AutorizacaoVinculo.cliente_id == cliente_id,
+        AutorizacaoVinculo.escritorio_id == escritorio_id,
+        AutorizacaoVinculo.usado_em.is_(None),
+        AutorizacaoVinculo.cancelado_em.is_(None),
+    ).update({'cancelado_em': agora}, synchronize_session=False)
+    codigo = ''.join(secrets.choice(AUTORIZACAO_VINCULO_ALFABETO) for _ in range(AUTORIZACAO_VINCULO_TAMANHO))
+    autorizacao = AutorizacaoVinculo(
+        cliente_id=cliente_id, escritorio_id=escritorio_id,
+        codigo_hash=_hash_codigo_autorizacao(codigo), criado_em=agora,
+        expira_em=agora + timedelta(minutes=AUTORIZACAO_VINCULO_TTL_MINUTOS),
+    )
+    db.session.add(autorizacao)
+    return f'{codigo[:5]}-{codigo[5:]}', autorizacao
+
+
+def _filtro_consumo_autorizacao(codigo_hash, cliente_id, escritorio_id, agora):
+    return AutorizacaoVinculo.query.filter(
+        AutorizacaoVinculo.codigo_hash == codigo_hash,
+        AutorizacaoVinculo.cliente_id == cliente_id,
+        AutorizacaoVinculo.escritorio_id == escritorio_id,
+        AutorizacaoVinculo.usado_em.is_(None),
+        AutorizacaoVinculo.cancelado_em.is_(None),
+        AutorizacaoVinculo.expira_em > agora,
+    )
+
+
+def _consumir_autorizacao_vinculo(cliente_id, escritorio_id, codigo):
+    """Consome a autorização na transação atual. Retorna o id consumido ou None.
+
+    Um único UPDATE condicional garante o uso único: com requisições simultâneas, só uma altera a linha.
+    """
+    if len(_normalizar_codigo_autorizacao(codigo)) != AUTORIZACAO_VINCULO_TAMANHO:
+        return None
+    codigo_hash = _hash_codigo_autorizacao(codigo)
+    agora = agora_utc()
+    alteradas = _filtro_consumo_autorizacao(codigo_hash, cliente_id, escritorio_id, agora).update(
+        {'usado_em': agora}, synchronize_session=False
+    )
+    if alteradas != 1:
+        return None
+    return db.session.query(AutorizacaoVinculo.id).filter_by(codigo_hash=codigo_hash).scalar()
 
 
 def _titulares_dos_clientes(cliente_ids):
@@ -2095,6 +2192,22 @@ def processos():
             return jsonify({'erro': 'Informe um telefone válido para o cliente.'}), 400
 
         cliente = Cliente.query.filter_by(telefone=telefone_normalizado).first()
+        autorizacao_id = None
+        if cliente and not _cliente_vinculado_ao_escritorio(cliente.id, request.escritorio.id):
+            # RR2: um cadastro existente só é reutilizado pelo escritório que já atende o cliente.
+            # Vincular a outro escritório exige autorização comprovável, tratada pelo suporte.
+            permitido, espera = verificar_limite_acao(
+                f'vinculo-bloqueado:{request.escritorio.id}', max_tentativas=5, janela_segundos=3600
+            )
+            if not permitido:
+                return jsonify({'erro': f'Muitas tentativas. Tente novamente em {espera} segundos.'}), 429
+            # A única exceção é um código de autorização emitido pelo próprio cliente para este escritório.
+            codigo_autorizacao = data.get('codigo_autorizacao')
+            autorizacao_id = _consumir_autorizacao_vinculo(cliente.id, request.escritorio.id, codigo_autorizacao)
+            if not autorizacao_id:
+                if codigo_autorizacao:
+                    app.logger.warning('[RR2] autorizacao_recusada escritorio_id=%s', request.escritorio.id)
+                return jsonify({'erro': MENSAGEM_VINCULO_BLOQUEADO, 'vinculo_bloqueado': True}), 409
         cliente_existente = bool(cliente)
         senha_temp = None
         if not cliente:
@@ -2118,7 +2231,23 @@ def processos():
             descricao=(data.get('descricao') or '').strip()
         )
         db.session.add(processo)
-        db.session.commit()
+        try:
+            if autorizacao_id:
+                db.session.flush()
+                AutorizacaoVinculo.query.filter_by(id=autorizacao_id).update(
+                    {'processo_id': processo.id}, synchronize_session=False
+                )
+            db.session.commit()
+        except SQLAlchemyError as erro:
+            # Desfaz processo, cliente novo e o consumo do código de autorização.
+            db.session.rollback()
+            app.logger.error('Falha ao criar processo: %s', type(erro).__name__)
+            return jsonify({'erro': 'Não foi possível criar o processo. Nenhuma alteração foi salva.'}), 500
+        if autorizacao_id:
+            app.logger.info(
+                '[RR2] vinculo_autorizado autorizacao_id=%s escritorio_id=%s processo_id=%s',
+                autorizacao_id, request.escritorio.id, processo.id
+            )
 
         return jsonify({
             'id': processo.id,
@@ -2692,6 +2821,52 @@ def processos_do_cliente():
         'advogado_nome': p.advogado.nome if p.advogado else None,
         'escritorio_nome': p.escritorio.nome
     } for p in lista])
+
+
+@app.route('/api/cliente/autorizar-escritorio', methods=['POST'])
+@login_cliente_obrigatorio
+def autorizar_escritorio_cliente():
+    """RR2: o cliente autenticado autoriza um escritório a vinculá-lo (outro escritório ou recadastro).
+
+    Sem 'confirmar', só mostra o nome do escritório para o cliente conferir. Com 'confirmar',
+    emite um código de uso único, válido por poucos minutos, que só serve para esse escritório.
+    """
+    permitido, espera = verificar_limite_acao(f'autorizar-escritorio:{request.cliente.id}', 10, 3600)
+    if not permitido:
+        return jsonify({'erro': f'Muitas solicitações. Tente novamente em {espera} segundos.'}), 429
+
+    data = request.get_json() or {}
+    email = str(data.get('email_escritorio') or '').strip().lower()
+    escritorio = Escritorio.query.filter_by(email=email).first() if email else None
+    if (not escritorio or not escritorio.plano_ativo()
+            or (escritorio.email_confirmacao_obrigatoria and not escritorio.email_confirmado_em)):
+        return jsonify({'erro': 'Escritório não encontrado ou indisponível para autorização.'}), 404
+    if not data.get('confirmar'):
+        return jsonify({'escritorio_nome': escritorio.nome})
+    if _cliente_vinculado_ao_escritorio(request.cliente.id, escritorio.id):
+        return jsonify({'erro': 'Este escritório já está vinculado ao seu cadastro.'}), 409
+
+    emitidas = AutorizacaoVinculo.query.filter(
+        AutorizacaoVinculo.cliente_id == request.cliente.id,
+        AutorizacaoVinculo.criado_em >= agora_utc() - timedelta(hours=1),
+    ).count()
+    if emitidas >= AUTORIZACAO_VINCULO_MAX_POR_HORA:
+        return jsonify({'erro': 'Limite de autorizações atingido. Tente novamente mais tarde.'}), 429
+
+    try:
+        codigo, autorizacao = _emitir_autorizacao_vinculo(request.cliente.id, escritorio.id)
+        db.session.commit()
+    except SQLAlchemyError as erro:
+        db.session.rollback()
+        app.logger.error('Falha ao emitir autorização de vínculo: %s', type(erro).__name__)
+        return jsonify({'erro': 'Não foi possível gerar a autorização. Tente novamente.'}), 500
+    app.logger.info('[RR2] autorizacao_emitida autorizacao_id=%s escritorio_id=%s', autorizacao.id, escritorio.id)
+    return jsonify({
+        'codigo': codigo,
+        'escritorio_nome': escritorio.nome,
+        'expira_em': autorizacao.expira_em.isoformat() + 'Z',
+        'validade_minutos': AUTORIZACAO_VINCULO_TTL_MINUTOS,
+    })
 
 
 # ──────────────────────────────────────────────

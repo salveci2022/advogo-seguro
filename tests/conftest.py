@@ -36,3 +36,22 @@ def client():
     with flask_app.app_context():
         db.session.remove()
         db.drop_all()
+
+
+def criar_vinculo_legado(advogado_id, telefone):
+    """Simula vínculo entre escritórios criado antes do bloqueio RR2 (dado legado).
+
+    A API não permite mais esse vínculo; ele é inserido direto no banco de teste
+    para verificar as proteções que continuam valendo para dados antigos.
+    """
+    import secrets
+    with flask_app.app_context():
+        advogado = db.session.get(appmodule.Advogado, advogado_id)
+        cliente = appmodule.Cliente.query.filter_by(telefone=telefone).one()
+        processo = appmodule.Processo(
+            escritorio_id=advogado.escritorio_id, advogado_id=advogado.id, cliente_id=cliente.id,
+            codigo_unico=appmodule.gerar_codigo_unico(), token_cliente=secrets.token_urlsafe(28),
+        )
+        db.session.add(processo)
+        db.session.commit()
+        return {'id': processo.id, 'codigo_unico': processo.codigo_unico, 'cliente_id': cliente.id}

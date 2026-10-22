@@ -7,7 +7,7 @@ Rodar com:  pytest tests/test_cascata.py -v
 """
 import json
 
-from conftest import appmodule, db
+from conftest import appmodule, criar_vinculo_legado, db
 
 
 def _post(client, path, token=None, body=None):
@@ -256,7 +256,7 @@ def test_cliente_compartilhado_entre_escritorios_preserva_registro_do_outro(clie
 
     telefone_comum = '61977776666'
     criar_processo(client, token_a, adv_a, cliente_telefone=telefone_comum)
-    criar_processo(client, token_b, adv_b, cliente_telefone=telefone_comum)
+    criar_vinculo_legado(adv_b, telefone_comum)
 
     lista_a = _get(client, '/api/escritorio/clientes', token_a).get_json()
     cliente_id = lista_a[0]['id']

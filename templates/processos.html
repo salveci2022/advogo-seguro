@@ -76,6 +76,11 @@
         <label>Descrição</label>
         <textarea class="form-control" id="procDescricao" placeholder="Breve descrição do caso..."></textarea>
       </div>
+      <div class="form-group" id="procCodigoAutorizacaoWrap" style="display:none;">
+        <label>Código de autorização do cliente</label>
+        <input type="text" class="form-control" id="procCodigoAutorizacao" autocomplete="off" placeholder="XXXXX-XXXXX">
+        <div class="helper-text">Peça ao cliente que entre na área dele no ADVOGO SEGURO, em "Autorizar escritório", informe o e-mail deste escritório e passe o código para você.</div>
+      </div>
       <div class="modal-actions">
         <button type="button" class="btn-spy btn-spy-ghost btn-spy-block" onclick="fecharModalNovo()">Cancelar</button>
         <button type="submit" class="btn-spy btn-spy-primary btn-spy-block" id="btnSalvarProcesso">Criar processo</button>
@@ -200,6 +205,7 @@ function abrirModalNovo() { document.getElementById('modalProcesso').classList.a
 function fecharModalNovo() {
   document.getElementById('modalProcesso').classList.remove('show');
   document.getElementById('formProcesso').reset();
+  document.getElementById('procCodigoAutorizacaoWrap').style.display = 'none';
   hideAlert('alertaModal');
 }
 function fecharModalResultado() {
@@ -399,7 +405,8 @@ document.getElementById('formProcesso').addEventListener('submit', async (e) => 
         cliente_telefone: document.getElementById('procClienteTelefone').value.trim(),
         cliente_email: document.getElementById('procClienteEmail').value.trim(),
         numero_processo: document.getElementById('procNumero').value.trim(),
-        descricao: document.getElementById('procDescricao').value.trim()
+        descricao: document.getElementById('procDescricao').value.trim(),
+        codigo_autorizacao: document.getElementById('procCodigoAutorizacao').value.trim()
       }
     });
 
@@ -414,6 +421,9 @@ document.getElementById('formProcesso').addEventListener('submit', async (e) => 
     document.getElementById('mensagemAcessoCliente').textContent = data.mensagem_acesso || '';
     document.getElementById('modalResultado').classList.add('show');
   } catch (err) {
+    if (err.payload && err.payload.vinculo_bloqueado) {
+      document.getElementById('procCodigoAutorizacaoWrap').style.display = 'block';
+    }
     showAlert('alertaModal', err.message, 'erro');
   } finally {
     setLoading(btn, false, 'Criar processo');
