@@ -10,6 +10,7 @@ Padrão de arquitetura: igual SAE Fácil / NEXORA / PANIFICA PRO 360
 import os
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import re
@@ -371,17 +372,72 @@ _tentativas_login = {}  # chave: (ip, identificador) -> [timestamps]
 MAX_TENTATIVAS = 5
 JANELA_BLOQUEIO_SEGUNDOS = 300  # 5 minutos
 
+# APPSEC-003: além do limite por IP, falhas de login contam por conta, sem IP, para que
+# trocar de IP não renove as tentativas. O limite é maior que o por IP para reduzir o risco
+# de um terceiro bloquear a conta, e vale para qualquer identificador (existente ou não).
+PREFIXO_CHAVE_CONTA = 'conta:'
+MAX_FALHAS_POR_CONTA = 10
+JANELA_FALHAS_POR_CONTA = 900  # 15 minutos
 
-def _chave_rate_limit(identificador):
-    ip = request.headers.get('X-Forwarded-For', request.remote_addr or 'desconhecido').split(',')[0].strip()
-    return f'{ip}:{identificador.lower()}'
+# APPSEC-003: o X-Forwarded-For pode ser escrito pelo próprio cliente e nunca é confiado
+# por padrão. Ordem usada para obter o IP do cliente:
+# 1. No Render (variável RENDER, definida pela plataforma), o tráfego público passa pela
+#    Cloudflare, que sobrescreve CF-Connecting-IP com o IP real do cliente.
+# 2. Só com configuração explícita (TRUSTED_PROXY_COUNT=N > 0): o N-ésimo valor a partir do
+#    fim do X-Forwarded-For, que é o trecho acrescentado pelos proxies (regra do ProxyFix).
+# 3. Caso contrário, request.remote_addr. Local e testes usam sempre este.
+CONFIAR_CF_CONNECTING_IP = bool(os.environ.get('RENDER'))
+PROXIES_CONFIAVEIS = int(os.environ.get('TRUSTED_PROXY_COUNT', '0'))
+if PROXIES_CONFIAVEIS < 0:
+    raise RuntimeError('TRUSTED_PROXY_COUNT não pode ser negativo.')
 
 
-def verificar_rate_limit(identificador):
+def _ip_valido(valor):
+    try:
+        return str(ipaddress.ip_address((valor or '').strip()))
+    except ValueError:
+        return None
+
+
+def _ip_confiavel():
+    """IP do cliente para rate limit e logs; um X-Forwarded-For forjado não escolhe o valor."""
+    if CONFIAR_CF_CONNECTING_IP:
+        valores = request.headers.getlist('CF-Connecting-IP')
+        # A Cloudflare envia um único valor; mais de um indica cabeçalho duplicado e é ignorado.
+        ip_cf = _ip_valido(valores[0]) if len(valores) == 1 else None
+        if ip_cf:
+            return ip_cf
+    if PROXIES_CONFIAVEIS > 0:
+        encaminhados = [
+            ip.strip()
+            for cabecalho in request.headers.getlist('X-Forwarded-For')
+            for ip in cabecalho.split(',')
+            if ip.strip()
+        ]
+        if len(encaminhados) >= PROXIES_CONFIAVEIS:
+            ip_proxy = _ip_valido(encaminhados[-PROXIES_CONFIAVEIS])
+            if ip_proxy:
+                return ip_proxy
+    return request.remote_addr or 'desconhecido'
+
+
+def _chave_rate_limit(identificador, por_ip=True):
+    if not por_ip:
+        return f'{PREFIXO_CHAVE_CONTA}{identificador.lower()}'
+    return f'{_ip_confiavel()}:{identificador.lower()}'
+
+
+def _janela_da_chave(chave):
+    return JANELA_FALHAS_POR_CONTA if chave.startswith(PREFIXO_CHAVE_CONTA) else JANELA_BLOQUEIO_SEGUNDOS
+
+
+def verificar_rate_limit(identificador, por_ip=True):
     """Retorna (permitido: bool, segundos_restantes: int)."""
-    chave = _chave_rate_limit(identificador)
+    chave = _chave_rate_limit(identificador, por_ip)
+    janela = _janela_da_chave(chave)
+    maximo = MAX_TENTATIVAS if por_ip else MAX_FALHAS_POR_CONTA
     agora = agora_utc().timestamp()
-    tentativas = [t for t in _tentativas_login.get(chave, []) if agora - t < JANELA_BLOQUEIO_SEGUNDOS]
+    tentativas = [t for t in _tentativas_login.get(chave, []) if agora - t < janela]
     if tentativas:
         _tentativas_login[chave] = tentativas
     else:
@@ -390,33 +446,55 @@ def verificar_rate_limit(identificador):
     # Limpeza oportunista evita crescimento indefinido com identificadores únicos.
     if len(_tentativas_login) > 1000:
         for chave_antiga, valores in list(_tentativas_login.items()):
-            validas = [t for t in valores if agora - t < JANELA_BLOQUEIO_SEGUNDOS]
+            janela_antiga = _janela_da_chave(chave_antiga)
+            validas = [t for t in valores if agora - t < janela_antiga]
             if validas:
                 _tentativas_login[chave_antiga] = validas
             else:
                 _tentativas_login.pop(chave_antiga, None)
 
-    if len(tentativas) >= MAX_TENTATIVAS:
-        restante = int(JANELA_BLOQUEIO_SEGUNDOS - (agora - tentativas[0]))
+    if len(tentativas) >= maximo:
+        restante = int(janela - (agora - tentativas[0]))
         return False, max(restante, 1)
     return True, 0
 
 
-def registrar_tentativa_falha(identificador):
-    chave = _chave_rate_limit(identificador)
+def registrar_tentativa_falha(identificador, por_ip=True):
+    chave = _chave_rate_limit(identificador, por_ip)
     _tentativas_login.setdefault(chave, []).append(agora_utc().timestamp())
 
 
-def limpar_tentativas(identificador):
-    chave = _chave_rate_limit(identificador)
+def limpar_tentativas(identificador, por_ip=True):
+    chave = _chave_rate_limit(identificador, por_ip)
     _tentativas_login.pop(chave, None)
+
+
+def verificar_login_permitido(identificador):
+    """Limite por IP e por conta; a resposta é a mesma exista a conta ou não."""
+    permitido, espera = verificar_rate_limit(identificador)
+    if not permitido:
+        return permitido, espera
+    return verificar_rate_limit(identificador, por_ip=False)
+
+
+def registrar_falha_login(identificador):
+    registrar_tentativa_falha(identificador)
+    registrar_tentativa_falha(identificador, por_ip=False)
+
+
+def limpar_falhas_login(identificador):
+    limpar_tentativas(identificador)
+    limpar_tentativas(identificador, por_ip=False)
 
 
 _tentativas_acoes = {}
 
-def verificar_limite_acao(identificador, max_tentativas=5, janela_segundos=900):
-    """Rate limit simples para reset e rotas públicas sensíveis."""
-    chave = _chave_rate_limit(f'acao:{identificador}')
+def verificar_limite_acao(identificador, max_tentativas=5, janela_segundos=900, por_ip=True):
+    """Rate limit simples para reset e rotas públicas sensíveis.
+
+    por_ip=False conta por identidade (e-mail, telefone, código), qualquer que seja o IP.
+    """
+    chave = _chave_rate_limit(f'acao:{identificador}', por_ip)
     agora = agora_utc().timestamp()
     valores = [t for t in _tentativas_acoes.get(chave, []) if agora - t < janela_segundos]
     if len(valores) >= max_tentativas:
@@ -1341,6 +1419,8 @@ def esqueci_senha_escritorio():
     data = request.get_json() or {}
     email = (data.get('email') or '').strip().lower()
     permitido, espera = verificar_limite_acao(f'reset-escritorio:{email or "vazio"}', 5, 900)
+    if permitido:
+        permitido, espera = verificar_limite_acao(f'reset-escritorio:{email or "vazio"}', 5, 900, por_ip=False)
     if not permitido:
         return jsonify({'erro': f'Muitas solicitações. Tente novamente em {espera} segundos.'}), 429
 
@@ -1395,6 +1475,9 @@ def esqueci_senha_escritorio():
 
 @app.route('/api/escritorio/redefinir-senha', methods=['POST'])
 def redefinir_senha_escritorio():
+    permitido, espera = verificar_limite_acao('redefinir-senha', 10, 900)
+    if not permitido:
+        return jsonify({'erro': f'Muitas tentativas. Tente novamente em {espera} segundos.'}), 429
     data = request.get_json() or {}
     token = data.get('token', '')
     nova_senha = data.get('nova_senha') or ''
@@ -1440,6 +1523,8 @@ def esqueci_senha_cliente():
     data = request.get_json() or {}
     telefone = ''.join(filter(str.isdigit, (data.get('telefone') or ''))) 
     permitido, espera = verificar_limite_acao(f'reset-cliente:{telefone or "vazio"}', 5, 900)
+    if permitido:
+        permitido, espera = verificar_limite_acao(f'reset-cliente:{telefone or "vazio"}', 5, 900, por_ip=False)
     if not permitido:
         return jsonify({'erro': f'Muitas solicitações. Tente novamente em {espera} segundos.'}), 429
 
@@ -1452,6 +1537,9 @@ def esqueci_senha_cliente():
 
 @app.route('/api/cliente/redefinir-senha', methods=['POST'])
 def redefinir_senha_cliente():
+    permitido, espera = verificar_limite_acao('redefinir-senha', 10, 900)
+    if not permitido:
+        return jsonify({'erro': f'Muitas tentativas. Tente novamente em {espera} segundos.'}), 429
     data = request.get_json() or {}
     token = data.get('token', '')
     nova_senha = data.get('nova_senha') or ''
@@ -1575,7 +1663,7 @@ def _registrar_escritorio_comercial(data):
     plano = normalizar_codigo_plano(data.get('plano'))
 
     permitido, espera = verificar_limite_acao(
-        f'registro-comercial:{request.remote_addr or "desconhecido"}',
+        'registro-comercial',
         max_tentativas=5,
         janela_segundos=3600,
     )
@@ -1670,6 +1758,11 @@ def confirmar_email_comercial():
     permitido, espera = verificar_limite_acao(
         f'confirmar-email:{email}', max_tentativas=8, janela_segundos=900
     )
+    if permitido:
+        # Por e-mail, qualquer que seja o IP: o código tem só 6 dígitos.
+        permitido, espera = verificar_limite_acao(
+            f'confirmar-email:{email}', max_tentativas=10, janela_segundos=900, por_ip=False
+        )
     if not permitido:
         return jsonify({'erro': f'Muitas tentativas. Tente novamente em {espera} segundos.'}), 429
     if not email or len(codigo) != 6:
@@ -1714,6 +1807,10 @@ def reenviar_confirmacao_comercial():
     permitido, espera = verificar_limite_acao(
         f'reenviar-confirmacao:{email}', max_tentativas=3, janela_segundos=3600
     )
+    if permitido:
+        permitido, espera = verificar_limite_acao(
+            f'reenviar-confirmacao:{email}', max_tentativas=3, janela_segundos=3600, por_ip=False
+        )
     if not permitido:
         return jsonify({'erro': f'Aguarde {espera} segundos antes de reenviar.'}), 429
 
@@ -1779,13 +1876,13 @@ def login_escritorio():
     email = (data.get('email') or '').strip().lower()
     senha = data.get('senha') or ''
 
-    permitido, espera = verificar_rate_limit(email)
+    permitido, espera = verificar_login_permitido(f'escritorio:{email}')
     if not permitido:
         return jsonify({'erro': f'Muitas tentativas de login. Tente novamente em {espera} segundos.'}), 429
 
     escritorio = Escritorio.query.filter_by(email=email).first()
     if not escritorio or not verificar_senha(escritorio.senha_hash, senha):
-        registrar_tentativa_falha(email)
+        registrar_falha_login(f'escritorio:{email}')
         return jsonify({'erro': 'Email ou senha incorretos'}), 401
 
     if not escritorio.email_confirmado():
@@ -1795,7 +1892,7 @@ def login_escritorio():
             'email': escritorio.email,
         }), 403
 
-    limpar_tentativas(email)
+    limpar_falhas_login(f'escritorio:{email}')
     # upgrade silencioso de hash legado (sha256) para PBKDF2
     if len(escritorio.senha_hash) == 64 and ':' not in escritorio.senha_hash:
         escritorio.senha_hash = hash_senha(senha)
@@ -2848,18 +2945,18 @@ def login_cliente():
     telefone = ''.join(filter(str.isdigit, (data.get('telefone') or ''))) 
     senha = data.get('senha') or ''
 
-    permitido, espera = verificar_rate_limit(telefone)
+    permitido, espera = verificar_login_permitido(f'cliente:{telefone}')
     if not permitido:
         return jsonify({'erro': f'Muitas tentativas de login. Tente novamente em {espera} segundos.'}), 429
 
     cliente = Cliente.query.filter_by(telefone=telefone).first()
     if not cliente or not verificar_senha(cliente.senha_hash, senha):
-        registrar_tentativa_falha(telefone)
+        registrar_falha_login(f'cliente:{telefone}')
         return jsonify({'erro': 'Telefone ou senha incorretos'}), 401
     if not cliente.ativo:
         return jsonify({'erro': 'Acesso do cliente desativado. Entre em contato com o escritório responsável.'}), 403
 
-    limpar_tentativas(telefone)
+    limpar_falhas_login(f'cliente:{telefone}')
     if len(cliente.senha_hash) == 64 and ':' not in cliente.senha_hash:
         cliente.senha_hash = hash_senha(senha)
         db.session.commit()
@@ -3081,8 +3178,7 @@ def _pseudonimizar_ip(ip):
 
 
 def _ip_cliente():
-    bruto = request.headers.get('X-Forwarded-For', request.remote_addr or '').split(',')[0].strip()
-    return _pseudonimizar_ip(bruto)
+    return _pseudonimizar_ip(_ip_confiavel())
 
 
 def _migrar_ips_legados_para_hash():
@@ -3355,8 +3451,7 @@ def verificar_contato():
 # ──────────────────────────────────────────────
 
 def _ip_requisicao():
-    bruto = request.headers.get('X-Forwarded-For', request.remote_addr or '').split(',')[0].strip()
-    return _pseudonimizar_ip(bruto)
+    return _pseudonimizar_ip(_ip_confiavel())
 
 
 def _avatar_iniciais(nome):
@@ -3563,6 +3658,10 @@ def verificar_contato_publico():
 
     if not codigo:
         return jsonify({'erro': 'Informe o código do processo para verificar.'}), 400
+    # Por código, qualquer que seja o IP: limita varredura e gravação de tentativas no mesmo processo.
+    permitido, espera = verificar_limite_acao(f'verificacao-publica:{codigo}', 20, 600, por_ip=False)
+    if not permitido:
+        return jsonify({'erro': f'Muitas verificações. Tente novamente em {espera} segundos.'}), 429
 
     processo = Processo.query.filter_by(codigo_unico=codigo).first()
 
