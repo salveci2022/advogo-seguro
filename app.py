@@ -1355,6 +1355,10 @@ def login_cliente_obrigatorio(f):
             return jsonify({'erro': 'Cliente não encontrado'}), 404
         if not hmac.compare_digest(str(dados.get('cv') or ''), _versao_credencial(cliente.senha_hash)):
             return jsonify({'erro': 'Sessão expirada. Faça login novamente.'}), 401
+        # Desativar o cliente encerra também as sessões já abertas, não só os novos logins.
+        # 401 faz o frontend limpar a sessão local e voltar ao login (static/js/api.js).
+        if not cliente.ativo:
+            return jsonify({'erro': MENSAGEM_CLIENTE_DESATIVADO, 'acesso_desativado': True}), 401
         if not _csrf_valido(dados, origem):
             return jsonify({'erro': 'Requisição de segurança inválida. Atualize a página e tente novamente.'}), 403
         if cliente.troca_senha_obrigatoria and not getattr(f, 'liberado_com_troca_de_senha_pendente', False):
@@ -1364,6 +1368,8 @@ def login_cliente_obrigatorio(f):
         return f(*args, **kwargs)
     return wrapper
 
+
+MENSAGEM_CLIENTE_DESATIVADO = 'Acesso do cliente desativado. Entre em contato com o escritório responsável.'
 
 MENSAGEM_TROCA_SENHA_OBRIGATORIA = (
     'Por segurança, crie uma senha pessoal antes de continuar. '
