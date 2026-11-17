@@ -39,6 +39,8 @@ from werkzeug.utils import secure_filename
 import jwt
 import stripe
 
+from seguranca_logs import instalar_filtro as instalar_filtro_tokens
+
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.units import mm
@@ -71,6 +73,9 @@ app = Flask(__name__)
 if not app.logger.handlers:
     logging.basicConfig(level=logging.INFO)
 app.logger.setLevel(logging.INFO)
+# Tokens de URL (link seguro, foto, redefinição de senha) nunca vão para logs da aplicação
+# nem do servidor de desenvolvimento. No Gunicorn, ver gunicorn.conf.py.
+instalar_filtro_tokens(app.logger, logging.getLogger('werkzeug'))
 
 IS_PRODUCTION = bool(os.environ.get('RENDER') or os.environ.get('FLASK_ENV') == 'production')
 
@@ -124,7 +129,8 @@ if DATABASE_URL.startswith('postgres://'):
     DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'pool_pre_ping': True}
+# hide_parameters: mensagens de erro do banco não carregam valores (tokens, hashes, telefones).
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'pool_pre_ping': True, 'hide_parameters': True}
 
 @event.listens_for(Engine, 'connect')
 def _ativar_foreign_keys_sqlite(dbapi_connection, connection_record):
