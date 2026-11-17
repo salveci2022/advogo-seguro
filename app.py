@@ -1350,6 +1350,11 @@ def login_cliente_obrigatorio(f):
         dados = decodificar_token(token) if token else None
         if not dados or dados.get('tipo') != 'cliente':
             return jsonify({'erro': 'Não autenticado'}), 401
+        # Retorno seguro da 1.2.0: tokens com sessão persistente (sid) ou geração (gs) só são
+        # emitidos pela 1.2.0, que controla revogação por aparelho. Esta versão não conhece essas
+        # revogações; aceitar esses tokens reabriria acessos encerrados. O cliente entra de novo.
+        if 'sid' in dados or 'gs' in dados:
+            return jsonify({'erro': MENSAGEM_SESSAO_DE_OUTRA_VERSAO}), 401
         cliente = db.session.get(Cliente, dados['id'])
         if not cliente:
             return jsonify({'erro': 'Cliente não encontrado'}), 404
@@ -1370,6 +1375,7 @@ def login_cliente_obrigatorio(f):
 
 
 MENSAGEM_CLIENTE_DESATIVADO = 'Acesso do cliente desativado. Entre em contato com o escritório responsável.'
+MENSAGEM_SESSAO_DE_OUTRA_VERSAO = 'Sessão encerrada. Faça login novamente.'
 
 MENSAGEM_TROCA_SENHA_OBRIGATORIA = (
     'Por segurança, crie uma senha pessoal antes de continuar. '
@@ -3594,9 +3600,18 @@ def _limite_link_seguro(token, escrita=False):
 
 
 def _processo_do_link(token):
+    """Processo do link seguro: token exato, processo ativo e cliente ativo.
+
+    Cliente desativado é tratado como link inválido (mesma resposta genérica de token inexistente):
+    nem leitura nem registro de alerta/análise. Reativar o cliente restaura o link.
+    """
     if not token or len(token) > LIMITE_TOKEN_LINK:
         return None
-    return Processo.query.filter_by(token_cliente=token, status='ativo').first()
+    return Processo.query.join(Cliente, Processo.cliente_id == Cliente.id).filter(
+        Processo.token_cliente == token,
+        Processo.status == 'ativo',
+        Cliente.ativo.is_(True),
+    ).first()
 
 
 @app.route('/api/cliente-publico/contato-seguro/<token>', methods=['GET'])
